@@ -1,15 +1,16 @@
 import type { AppConfig } from '../../../protocol/src/index.ts';
-import { abortable, modelCompletion } from './model-completion.ts';
+import type { Store } from '../../../plugin-sdk/src/index.ts';
+import { abortable, ModelLimitError, modelCompletion } from './model-completion.ts';
 
 function failure(status: number, message: string) { return Object.assign(new Error(message), { status }); }
 
-export async function translateReply(config: AppConfig, text: string, target: string, signal: AbortSignal): Promise<string> {
+export async function translateReply(config: AppConfig, text: string, target: string, signal: AbortSignal, store?: Pick<Store, 'get' | 'put' | 'remove'>, timeZone = 'Asia/Shanghai'): Promise<string> {
   if (signal.aborted) throw new DOMException('回复翻译已取消', 'AbortError');
   if (typeof text !== 'string' || !text.trim()) throw failure(400, '没有可翻译的回复正文');
   let characters = 0;
   for (const _ of text) if (++characters > 32_000) throw failure(400, '回复超过 32000 个字符，无法完整翻译');
   if (config.demo) throw failure(503, '演示模式未启用回复翻译');
-  // Use the same configured or automatically available model as the main assistant.
+  // The translation purpose: a model of its own if one is set, else the main assistant's.
   const selected = { dataDir: config.dataDir, model: structuredClone(config.model) };
   const instructions = [
     '你是翻译。将输入 JSON 中 texts 数组的唯一一条消息完整翻译成' + target + '。已是目标语言的部分保持原样。',
@@ -20,8 +21,10 @@ export async function translateReply(config: AppConfig, text: string, target: st
   const tokenBudget = Math.min(32000, 4000 + 3 * characters);
   let complete;
   try {
-    complete = await abortable(() => modelCompletion(selected, signal, instructions, tokenBudget), signal);
-  } catch {
+    complete = await abortable(() => modelCompletion(selected, signal, instructions, tokenBudget, false, 'translation', store, timeZone), signal);
+  } catch (error) {
+    // A limit that is reached says so. Other failures may name the prompt, the key or the endpoint.
+    if (error instanceof ModelLimitError) throw failure(error.status, error.message);
     if (signal.aborted) throw new DOMException('回复翻译已取消', 'AbortError');
     throw failure(503, '翻译模型不可用，请检查主模型配置与凭证');
   }
@@ -31,7 +34,8 @@ export async function translateReply(config: AppConfig, text: string, target: st
     if (Array.isArray(translated) && translated.length === 1 && typeof translated[0] === 'string' && translated[0].trim()) {
       return translated[0];
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof ModelLimitError) throw failure(error.status, error.message);
     if (signal.aborted) throw new DOMException('回复翻译已取消', 'AbortError');
     // Provider failures may include the prompt, credentials or endpoint.
   }

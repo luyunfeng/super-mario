@@ -6,6 +6,7 @@ import { setImmediate } from 'node:timers/promises';
 import { feishuAudienceHistory, type FeishuAudience } from './feishu-audience.ts';
 import { quotedAttachments } from './quoted-attachments.ts';
 import { conversationModels } from './model-catalog.ts';
+import { countUse, readRouting, recordFallback, resolvePurpose, type Purpose } from '../model-routing.ts';
 import { prepareChatImages, saveChatImages, readChatImages } from '../chat-images.ts';
 import { prepareChatFiles, readChatFile } from '../chat-files.ts';
 import { chatFileContext, type ChatFileReader } from './chat-file-context.ts';
@@ -58,7 +59,9 @@ interface Options {
   reviewsForSource?:(input?:Message)=>PendingOwnerReview[];
   reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: (assistantId?: string) => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>;
   // The owner's automation rules for a project, read again on each turn.
-  automationPolicy?: (projectId?: string) => AutomationPolicy | undefined; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; conversationThreadId?: string; botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json }
+  automationPolicy?: (projectId?: string) => AutomationPolicy | undefined; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; conversationThreadId?: string; botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json;
+  /** What kind of work this runtime does, which decides the model it is given. The main conversation by default. */
+  purpose?: Purpose; now?: () => Date; timeZone?: () => string }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 interface PendingTurn {
@@ -140,6 +143,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   const basePrompt = options.contextMode === 'project-memory' ? PROJECT_MEMORY_SYSTEM_PROMPT : options.systemPrompt ?? MAIN_AGENT_SYSTEM_PROMPT;
   const { config, store, events, contributions } = options;
   const ownConversation = options.conversationId ?? 'main';
+  // What kind of work this runtime does, which decides the model it is given and what a day allows.
+  const purpose = options.purpose ?? 'main';
   function retrySource(user: Message) {
     if (!ownConversation.startsWith('web:')) return directWebSource(store,user);
     return user.conversationId===ownConversation && user.role==='user' && !user.todoId &&
@@ -422,10 +427,18 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       authPath: join(agentDir, 'auth.json'), modelsPath: join(agentDir, 'models.json'),
       modelsStorePath: join(agentDir, 'model-cache.json'), allowModelNetwork: false,
     });
-    const selectedId = config.model ? models.catalog().current : '';
+    // Which model this purpose is given. The main conversation keeps its own pick; another
+    // purpose has a model of its own or follows the main one. What a day allows is checked here,
+    // where the model is resolved, and counted when a request is made.
+    const resolved = resolvePurpose(store, readRouting(store), purpose, config.model?.model, (options.now ?? (() => new Date()))(), options.timeZone?.() ?? 'Asia/Shanghai');
+    if (resolved.blocked) throw new Error(resolved.blocked);
+    const selectedId = config.model ? (purpose === 'main' ? models.catalog().current : resolved.model || models.catalog().current) : '';
+    let fallbackId = resolved.fallback && resolved.fallback !== selectedId ? resolved.fallback : undefined;
+    let usingFallback = false;
     if (config.model?.provider === 'codex-cli') {
       const { registerCodexProvider } = await import('./codex-provider.ts');
       registerCodexProvider(modelRuntime, selectedId, { command: config.model.cliCommand, configDir: config.model.cliConfigDir });
+      if (fallbackId) registerCodexProvider(modelRuntime, fallbackId, { command: config.model.cliCommand, configDir: config.model.cliConfigDir });
     }
     if (config.model && config.model.provider !== 'codex-cli') {
       const { provider, baseUrl, apiKey } = config.model;
@@ -439,8 +452,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         modelRuntime.registerProvider(provider, {
           baseUrl: endpoint, api: customAnthropic ? 'anthropic-messages' : 'openai-completions',
           ...(customAnthropic ? {} : { authHeader: true }),
-          models: [{ id, name: id, reasoning: false, input: ['text','image'],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 }],
+          // The fallback is registered too, so that it can be had if the first is not there.
+          models: [id, ...(fallbackId ? [fallbackId] : [])].map(modelId => ({ id: modelId, name: modelId, reasoning: false, input: ['text','image'],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })),
         });
       } else if (endpoint) modelRuntime.registerProvider(provider, { baseUrl: endpoint });
       const key = apiKey || (provider === 'openai-compatible' ? process.env.OPENAI_API_KEY : undefined);
@@ -448,10 +462,18 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     settleCredentials = () => modelRuntime.settleCredentialWrites();
     const available = await modelRuntime.getAvailable();
-    const model = config.model
-      ? modelRuntime.getModel(config.model.provider, selectedId)
+    let model = config.model
+      ? modelRuntime.getModel(config.model.provider, selectedId) ?? (fallbackId ? modelRuntime.getModel(config.model.provider, fallbackId) : undefined)
       : available[0];
     if (!model) throw new Error(config.model ? `未找到模型 ${config.model.provider}/${selectedId}。` : '缺少可用模型或凭证；请配置模型和 API Key。');
+    // The first model is not there to be had, and a fallback was named: the fallback is used
+    // from the start. This is the only place a fallback is taken. A failure in the middle of a
+    // turn is not retried on another model: a tool may already have run, and running the turn
+    // again would run it twice.
+    if (config.model && model.id !== selectedId && fallbackId === model.id) {
+      usingFallback = true;
+      recordFallback(store, { purpose, from: selectedId, to: model.id, at: new Date().toISOString(), reason: '首选型号不存在' });
+    }
     if (!available.some(item => item.provider === model.provider && item.id === model.id)) {
       throw new Error(`模型 ${model.provider}/${model.id} 缺少可用凭证。`);
     }
@@ -974,6 +996,17 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (turn.stopped) return;
       if (!config.demo && stopping) throw new Error('运行时已关闭，本条输入未执行。');
       if (options.canUseScope?.(user) === false) throw new Error('机器人已停用或绑定范围已改变，本条输入未执行');
+      // The day's limit is read here, where the turn truly starts, and not only when the model
+      // was resolved: a session lives through many turns, and a limit checked once at the start
+      // would let a purpose run past it for as long as the session lasts. A turn refused here has
+      // done nothing, so it is not counted.
+      if (!config.demo) {
+        const now = (options.now ?? (() => new Date()))();
+        const zone = options.timeZone?.() ?? 'Asia/Shanghai';
+        const allowance = resolvePurpose(store, readRouting(store), purpose, config.model?.model, now, zone);
+        if (allowance.blocked) throw new Error(allowance.blocked);
+        countUse(store, purpose, now, zone);
+      }
       if (directWebSource(store,user)) options.validateQueuedWebInput?.(user);
       checkAttachmentAccess(user);
       if (!state.available) { confirmedFailure = true; throw new Error(state.reason); }

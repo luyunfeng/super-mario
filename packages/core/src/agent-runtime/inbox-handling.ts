@@ -8,6 +8,8 @@ type LoadSDK = NonNullable<Parameters<typeof createAgentRuntime>[1]>;
 interface Options {
   config: AppConfig; store: Store; events: EventBus; contributions: Contributions; ready: () => boolean;
   allowedTools?: string[];
+  /** The owner's time zone, as a day's limit on model use is a day there. */
+  timeZone?: () => string;
 }
 const failed = '收件处理失败或已取消，请重试。';
 const invalid = '收件处理来源或会话无效。';
@@ -187,7 +189,7 @@ export function createInboxHandlingRuntime(options: Options, loadSDK: LoadSDK = 
       };
     };
     const hasReadTools = Boolean(options.allowedTools?.length);
-    const runtime = createAgentRuntime({ config: structuredClone(options.config), store, events,
+    const runtime = createAgentRuntime({ config: structuredClone(options.config), store, events, purpose: 'inbox', timeZone: options.timeZone,
       contributions: options.contributions, conversationId, allowedTools: options.allowedTools ?? [], contextMode: 'principles',
       canUseScope: () => !signal.aborted,
       systemPrompt: hasReadTools

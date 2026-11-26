@@ -60,7 +60,8 @@ import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
 import { createWebPresence } from './web-presence.ts';
-import { createBriefingSettings, heldNotificationRecords } from './briefing.ts';
+import { createBriefingSettings, heldNotificationRecords, readBriefingSettings } from './briefing.ts';
+import { PURPOSES, PURPOSE_INFO, readFallbacks, readRouting, resolvePurpose, validateRule, type Purpose } from './model-routing.ts';
 import { createAgentFollowups } from './followups.ts';
 import { createAutoTakeover } from './auto-takeover.ts';
 import { todoDelegationPrompt, formatProjectInstructions, INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT, PROJECT_LESSON_MODEL_SYSTEM_PROMPT } from './prompts.ts';
@@ -169,6 +170,8 @@ export async function createWorkbench(config: AppConfig) {
   let replyToInboxSource: ((source: InboxHandlingSource, text: string, key: string) => Promise<Json>) | undefined;
   const background = createBackground({ store, events, effects, propose: input => approvals.propose(input) });
   const briefing = createBriefingSettings(store, background.schedules);
+  // The owner's time zone, as the briefing settings keep it: a day's limit on model use is a day there.
+  const modelRoutingTimezone = () => readBriefingSettings(store).timezone;
   const plugins = new PluginHost({ store, events, contributions, dataDir: config.dataDir, background: background.host,
     usageGatewayAccounts:input=>usageSources.inventory(input) });
   let machines: MachineClient | undefined;
@@ -1028,7 +1031,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationRetry);
   plugins.register(conversationOutbox);
   plugins.register(conversationQueue);
-  plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal), () => modelRevision, message => {
+  plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal, store, modelRoutingTimezone()), () => modelRevision, message => {
     if (!plugins.list().some(p => p.id === 'web-conversations' && p.status === 'active')) return false;
     requireWebConversationHistory(store,message.conversationId.slice(4),message.projectId);
     return !!independentWebSource(store,message,message.conversationId,message.projectId);
@@ -1132,7 +1135,7 @@ export async function createWorkbench(config: AppConfig) {
   // What an accepted task taught is learned beside acceptance, with no tools. The call is
   // aborted when the host closes.
   const projectLessons = createProjectLessonLearner({ store, events, demo: config.demo, ask: async (text, signal) => {
-    const complete = await abortable(() => modelCompletion(config, signal, PROJECT_LESSON_MODEL_SYSTEM_PROMPT, 2048), signal);
+    const complete = await abortable(() => modelCompletion(config, signal, PROJECT_LESSON_MODEL_SYSTEM_PROMPT, 2048, false, 'lessons', store, modelRoutingTimezone()), signal);
     return abortable(() => complete(text, signal), signal);
   } });
   // Lessons are part of what the project's Agents are told. They are guidance from accepted
@@ -1206,14 +1209,14 @@ export async function createWorkbench(config: AppConfig) {
     await webThreadCleanup.clean(key);
     return { deleted: true };
   }
-  const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
+  const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor', purpose: 'supervisor', timeZone: modelRoutingTimezone,
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
-  const inboxClassifier = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available});
+  const inboxClassifier = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available,timeZone:modelRoutingTimezone});
   const inboxAssistantWorkspace = join(config.dataDir, 'pi', 'workspace');
-  const inboxAssistantRuntime = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available,
+  const inboxAssistantRuntime = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available,timeZone:modelRoutingTimezone,
     workspaceDir:inboxAssistantWorkspace, systemPrompt: INBOX_ASSISTANT_SYSTEM_PROMPT+'\n'+inboxGroupingAuthority});
-  const inboxHandlingRuntime = createInboxHandlingRuntime({config,store,events,contributions,ready:()=>agent.status().available,
+  const inboxHandlingRuntime = createInboxHandlingRuntime({config,store,events,contributions,ready:()=>agent.status().available,timeZone:modelRoutingTimezone,
     allowedTools: ['knowledge_list', 'todos_list', 'runs_list', 'work_read', 'projects_list', 'inbox_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'calendar_agenda']});
   const inbox = createInboxService({ store, events, createTodo: input => createTodo(input, false),
     triage: async thing => {
@@ -3772,12 +3775,43 @@ export async function createWorkbench(config: AppConfig) {
   function modelStatus() {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
+  /** What each purpose is set to, how much of today it has used, and the fallbacks that happened. */
+  function modelRoutingStatus() {
+    const routing = readRouting(store);
+    const now = new Date(), zone = modelRoutingTimezone();
+    const mainModel = config.model?.model;
+    return {
+      mainModel: mainModel ?? '',
+      timeZone: zone,
+      purposes: PURPOSES.map(purpose => {
+        const resolved = resolvePurpose(store, routing, purpose, mainModel, now, zone);
+        return { purpose, ...PURPOSE_INFO[purpose], ...resolved, rule: routing[purpose] ?? {} };
+      }),
+      fallbacks: readFallbacks(store),
+    };
+  }
+  /** Sets what one purpose does. A field left out or emptied goes back to following the main model. */
+  function configureModelRouting(purpose: string, input: unknown) {
+    if (!PURPOSES.includes(purpose as Purpose)) throw new InputError('用途不存在', 404);
+    const rule = validateRule(purpose as Purpose, input);
+    store.transaction(() => {
+      const routing = readRouting(store);
+      if (Object.keys(rule).length) routing[purpose as Purpose] = rule;
+      else delete routing[purpose as Purpose];
+      if (Object.keys(routing).length) store.put('settings', 'model-routing', routing);
+      else store.remove('settings', 'model-routing');
+    });
+    // A session resolved its model when it started. One that is idle takes the new setting now;
+    // one that is busy keeps what it has until it is next idle, and takes it then.
+    for (const runtime of [agent, supervisorRuntime]) if (!runtime.configurationBusy()) void runtime.reloadConfiguration().catch(() => {});
+    return modelRoutingStatus();
+  }
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
     githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, takeMailAttachment, proposeMail, MAIL_SEND_APPROVAL, readSent,
     mailConnectorView, mailConnectorConfigure, mailPoll: async () => { await plugins.invocations.use(MAIL_POLL_SERVICE, {}); },
-    mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, exportRunDiagnostics, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, exportRunDiagnostics, modelRoutingStatus, configureModelRouting, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

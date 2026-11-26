@@ -1,6 +1,8 @@
 import type { ImageContent } from '@earendil-works/pi-ai';
 import { join } from 'node:path';
 import type { AppConfig } from '../../../protocol/src/index.ts';
+import type { Store } from '../../../plugin-sdk/src/index.ts';
+import { countUse, readRouting, resolvePurpose, type Purpose } from '../model-routing.ts';
 
 /** Also stop promptly when a provider ignores AbortSignal; late answers cannot become results. */
 export async function abortable<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
@@ -20,19 +22,30 @@ export async function abortable<T>(work: () => Promise<T>, signal: AbortSignal):
   } finally { signal.removeEventListener('abort', abort); }
 }
 
-export async function modelCompletion(config: Pick<AppConfig, 'dataDir' | 'model'>, signal: AbortSignal, systemPrompt: string, tokenBudget = 8192, requestImages = false): Promise<(text: string, signal: AbortSignal, images?: ImageContent[]) => Promise<string>> {
+/** `purpose` and `store` decide which model this call is given: without them it is the main model. */
+/** A limit that is reached. It is the one failure of a completion that is safe to show as it is:
+ *  it names the purpose and the count, and nothing of the prompt, the key or the endpoint. */
+export class ModelLimitError extends Error { status = 429; }
+
+export async function modelCompletion(config: Pick<AppConfig, 'dataDir' | 'model'>, signal: AbortSignal, systemPrompt: string, tokenBudget = 8192, requestImages = false, purpose: Purpose = 'main', store?: Pick<Store, 'get' | 'put' | 'remove'>, timeZone = 'Asia/Shanghai'): Promise<(text: string, signal: AbortSignal, images?: ImageContent[]) => Promise<string>> {
   const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
   signal.throwIfAborted();
   const dir = join(config.dataDir, 'pi');
   const runtime = await ModelRuntime.create({ authPath: join(dir, 'auth.json'), modelsPath: join(dir, 'models.json'),
     modelsStorePath: join(dir, 'model-cache.json'), allowModelNetwork: false, signal });
   const setting = config.model;
+  // Which model this purpose is given. One with a model of its own uses it; another follows the main model.
+  const now = new Date();
+  const resolved = store ? resolvePurpose(store, readRouting(store), purpose, setting?.model, now, timeZone) : undefined;
+  if (resolved?.blocked) throw new ModelLimitError(resolved.blocked);
+  const chosen = resolved?.own ? resolved.model : setting?.model;
   let apiKey = setting?.apiKey;
   if (setting?.provider === 'codex-cli') {
     const { registerCodexProvider } = await import('./codex-provider.ts');
-    registerCodexProvider(runtime, setting.model, { command: setting.cliCommand, configDir: setting.cliConfigDir });
+    registerCodexProvider(runtime, chosen!, { command: setting.cliCommand, configDir: setting.cliConfigDir });
   } else if (setting) {
-    const { provider, model: id, baseUrl } = setting;
+    const { provider, baseUrl } = setting;
+    const id = chosen!;
     const endpoint = provider === 'anthropic' ? baseUrl?.replace(/\/v1(?:\/messages)?\/?$/, '') : baseUrl;
     const customAnthropic = provider === 'anthropic' && endpoint && !runtime.getModel(provider, id);
     if (provider === 'openai-compatible' || customAnthropic) {
@@ -42,10 +55,18 @@ export async function modelCompletion(config: Pick<AppConfig, 'dataDir' | 'model
     } else if (endpoint) runtime.registerProvider(provider, { baseUrl: endpoint });
     if (provider === 'openai-compatible') apiKey ||= process.env.OPENAI_API_KEY;
   }
-  const model = setting ? runtime.getModel(setting.provider, setting.model) : (await runtime.getAvailable(undefined, { signal }))[0];
+  const model = setting ? runtime.getModel(setting.provider, chosen!) : (await runtime.getAvailable(undefined, { signal }))[0];
   if (!model) throw new Error('主模型不可用');
   return async (text, requestSignal, images) => {
     requestSignal.throwIfAborted();
+    // Each call is one request, and is counted when it is made. A limit is read again here: the
+    // completion is made once and called many times.
+    if (store) {
+      const at = new Date();
+      const allowance = resolvePurpose(store, readRouting(store), purpose, setting?.model, at, timeZone);
+      if (allowance.blocked) throw new ModelLimitError(allowance.blocked);
+      countUse(store, purpose, at, timeZone);
+    }
     if (images?.length && !model.input.includes('image')) throw new Error('主模型不支持图片');
     // Direct completion: no agent session, workspace context, tool loop, or configuration echo.
     const reply = await runtime.completeSimple(model, { systemPrompt,

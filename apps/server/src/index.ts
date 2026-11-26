@@ -405,6 +405,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         if (path === '/api/v1/model' && method === 'GET') return json(res, 200, app.modelStatus());
         if (path === '/api/v1/model' && method === 'PUT') return json(res, 200, await app.configureModel(await body(req)));
+        // What model each kind of work uses, what a day allows, and what to fall back to.
+        if (path === '/api/v1/model/routing' && method === 'GET') return json(res, 200, app.modelRoutingStatus());
+        const modelPurpose = path.match(/^\/api\/v1\/model\/routing\/([a-z]+)$/);
+        if (modelPurpose && method === 'PUT') {
+          res.setHeader('cache-control', 'no-store');
+          return json(res, 200, app.configureModelRouting(modelPurpose[1]!, await body(req, 4096)));
+        }
         if (path === '/api/v1/agent-artifacts' && method === 'GET') return json(res, 200, artifacts.list());
         if (path === '/api/v1/agent-artifacts' && method === 'POST') return json(res, 201, artifacts.stage(await body(req)));
         const artifact = path.match(/^\/api\/v1\/agent-artifacts\/([^/]+)\/(approve|deploy|status|call)$/);

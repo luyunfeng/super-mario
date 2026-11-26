@@ -182,7 +182,7 @@ test('a decision that is made takes its pushed notification off the screen', { t
   assert.equal((await f.web('push/web/web-away', 'PUT', await f.subscription('web-away'))).status, 200);
   // An approval is something waiting on the owner: it is pushed at once.
   const todo = await f.web<{ id: string }>('todos', 'POST', { title: '合成审批任务' });
-  const run = await f.web<{ id: string }>('runs', 'POST', { executorId: 'demo', prompt: '合成', todoId: todo.id });
+  const run = await f.web<{ id: string }>('runs', 'POST', { executorId: 'demo', prompt: '合成', todoId: todo.body.id });
   const approval = await f.web<{ id: string; version: number }>('approvals', 'POST', { title: '合成的审批', details: '合成内容', kind: 'input', params: { id: run.body.id, text: '继续' } });
   assert.equal(approval.status, 201, JSON.stringify(approval.body));
   await t.waitFor(() => assert.ok(f.service.posts.length >= 1));
