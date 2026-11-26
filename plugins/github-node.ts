@@ -2,6 +2,7 @@
 // every call runs `gh api`, and only validated, typed data crosses back to the server.
 // Nothing here starts an AI coding agent.
 import { execFile } from 'node:child_process';
+import type { JsonObject, Json, NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 
 export type GhRun = (args: string[], options: { signal: AbortSignal; timeout?: number }) => Promise<string>;
 type Row = Record<string, unknown>;
@@ -162,14 +163,14 @@ export type GhReply<T> = { ok: true; data: T } | { ok: false; reason: GhError['k
 /**
  * The machine channel carries a message string and one status, so a reason typed on the
  * machine would be lost by the time the server reads it. Each handler answers with the reason
- * in its result instead of throwing, except for an aborted call, which the channel reports.
+ * in its result instead of throwing. A call that runs too long is cut by the command timeout.
  */
-async function reply<T>(read: () => Promise<T>): Promise<GhReply<T>> {
-  try { return { ok: true, data: await read() }; }
+async function reply<T>(read: () => Promise<T>): Promise<Json> {
+  try { return { ok: true, data: await read() } as Json; }
   catch (error) {
-    if (error instanceof GhError) return { ok: false, reason: error.kind, message: error.message };
+    if (error instanceof GhError) return { ok: false, reason: error.kind, message: error.message } as Json;
     // Anything else is a bug or an unexpected failure. Its text is not the owner's to read.
-    return { ok: false, reason: 'failed', message: new GhError('failed').message };
+    return { ok: false, reason: 'failed', message: new GhError('failed').message } as Json;
   }
 }
 function only(input: Row, allowed: string[]): void {
@@ -181,33 +182,40 @@ function pageOf(value: unknown): number {
   return value;
 }
 
-/** The handlers a machine offers for the GitHub connector. Every one is a read. */
+/**
+ * The handlers a machine offers for the GitHub connector. Every one is a read. The machine
+ * channel passes (params, emit) and no cancellation signal, so each read runs under a signal
+ * that never aborts and is bounded only by the command's own timeout.
+ */
 export function createGithubNode(options: { run?: GhRun } = {}) {
   const run = options.run ?? runGh;
-  return {
-    'github.account': async (params: unknown, signal: AbortSignal) => reply(async () => {
+  const uncancelled = new AbortController().signal;
+  // Checked against the machine channel signature at compile time.
+  const handlers: Record<string, NodeHandler> = {
+    'github.account': async params => reply(async () => {
       only(object(params) ?? {}, []);
-      return ghAccount(run, signal);
+      return ghAccount(run, uncancelled);
     }),
-    'github.notifications': async (params: unknown, signal: AbortSignal) => reply(async () => {
+    'github.notifications': async params => reply(async () => {
       const input = object(params) ?? {};
       only(input, ['all', 'page', 'since']);
       const page = pageOf(input.page);
       if (input.all !== undefined && typeof input.all !== 'boolean') throw new GhError('bad_response');
       if (input.since !== undefined && (typeof input.since !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(input.since))) throw new GhError('bad_response');
-      return ghNotifications(run, signal, { ...(input.all === true ? { all: true } : {}), page, ...(typeof input.since === 'string' ? { since: input.since } : {}) });
+      return ghNotifications(run, uncancelled, { ...(input.all === true ? { all: true } : {}), page, ...(typeof input.since === 'string' ? { since: input.since } : {}) });
     }),
-    'github.issue': async (params: unknown, signal: AbortSignal) => reply(async () => {
+    'github.issue': async params => reply(async () => {
       const input = object(params) ?? {};
       only(input, ['repository', 'number']);
       if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
-      return ghIssue(run, signal, input.repository, input.number);
+      return ghIssue(run, uncancelled, input.repository, input.number);
     }),
-    'github.comments': async (params: unknown, signal: AbortSignal) => reply(async () => {
+    'github.comments': async params => reply(async () => {
       const input = object(params) ?? {};
       only(input, ['repository', 'number', 'page']);
       if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
-      return ghComments(run, signal, input.repository, input.number, pageOf(input.page));
+      return ghComments(run, uncancelled, input.repository, input.number, pageOf(input.page));
     }),
   };
+  return handlers;
 }

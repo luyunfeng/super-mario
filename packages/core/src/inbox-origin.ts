@@ -26,6 +26,14 @@ export function normalizeInboxOrigin(value: unknown): InboxOrigin | undefined {
     if (typeof input.mentionedMe !== 'boolean') return fail();
     if (result.kind === 'group') result.mentionedMe = input.mentionedMe;
   }
+  if (input.github !== undefined) {
+    const github = input.github as Record<string, unknown> | null;
+    if (result.connector !== 'GitHub' || !github || typeof github.repository !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(github.repository) ||
+        typeof github.number !== 'number' || !Number.isSafeInteger(github.number) || github.number < 1 ||
+        (github.kind !== 'issues' && github.kind !== 'pull')) return fail();
+    result.github = { repository: github.repository, number: github.number, kind: github.kind };
+  }
   if (result.kind === 'group' && result.connector === '飞书' && input.personalGroupUserCount !== undefined) {
     const count = input.personalGroupUserCount;
     if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) return fail();

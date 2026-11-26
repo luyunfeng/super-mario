@@ -19,6 +19,9 @@ export interface InboxOrigin {
   personalGroupUserCount?: number;
   /** Collected via a group-ID restricted search after checking personal mute state. */
   personalGroupObserved?: true;
+  /** A GitHub notification of one pull request or issue. The link is built from this, never
+   *  taken from the API, so it always points at github.com/<repository>/<kind>/<number>. */
+  github?: { repository: string; number: number; kind: 'issues' | 'pull' };
 }
 
 export function excludesPersonalGroupFromAutomation(origin?: InboxOrigin): boolean {

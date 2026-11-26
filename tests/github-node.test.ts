@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
 import { GhError, createGithubNode, ghAccount, ghComments, ghIssue, ghNotifications, repositoryOf, runGh, type GhRun } from '../plugins/github-node.ts';
 
 const account = { login: 'octocat', name: 'The Octocat', id: 1, type: 'User' };
 const page = (items: unknown[]) => JSON.stringify(items);
 const isGhError = (kind: GhError['kind']) => (error: unknown) => error instanceof GhError && error.kind === kind;
+const emit = () => {};
 
 test('账号由 GitHub 回答，令牌内容不进入结果', async () => {
   const calls: string[][] = [];
@@ -68,29 +70,31 @@ test('议题与评论：仓库名严格校验，正文截断，链接由已校�
 });
 
 test('节点处理器只接受已知参数，越界参数与错误类型被拒绝', async () => {
-  const signal = new AbortController().signal;
   const node = createGithubNode({ run: async () => page([]) });
-  assert.deepEqual(await node['github.notifications']({}, signal), { ok: true, data: { items: [], hasNext: false } });
+  assert.deepEqual(await node['github.notifications']({}, emit), { ok: true, data: { items: [], hasNext: false } });
   const refused = (error: unknown) => {
     const value = error as { ok: false; reason: string };
     assert.equal(value.ok, false);
     return value.reason === 'bad_response';
   };
+  // These inputs are invalid on purpose. The cast is the caller of the machine channel
+  // handing over data that was not checked first.
   for (const params of [{ page: 0 }, { page: '2' }, { page: 1, extra: 1 }, { all: 'yes' }, { since: 'yesterday' }]) {
-    assert.ok(refused(await node['github.notifications'](params, signal)));
+    assert.ok(refused(await node['github.notifications'](params as unknown as JsonObject, emit)));
   }
-  assert.ok(refused(await node['github.issue']({ repository: 'o/r', number: '7' }, signal)));
-  assert.ok(refused(await node['github.comments']({ repository: '../x', number: 1 }, signal)));
+  assert.ok(refused(await node['github.issue']({ repository: 'o/r', number: '7' }, emit)));
+  assert.ok(refused(await node['github.comments']({ repository: '../x', number: 1 }, emit)));
 });
 
 test('处理器把失败原因放进结果：机器通道只传消息和状态码，抛出会丢失原因', async () => {
-  const signal = new AbortController().signal;
   const node = createGithubNode({ run: async () => { throw new GhError('not_signed_in'); } });
-  assert.deepEqual(await node['github.account']({}, signal), { ok: false, reason: 'not_signed_in', message: '这台电脑的 gh 尚未登录 GitHub。' });
+  // The handlers are called the way the machine calls them: the params and an emit function.
+  const emit = () => {};
+  assert.deepEqual(await node['github.account']({}, emit), { ok: false, reason: 'not_signed_in', message: '这台电脑的 gh 尚未登录 GitHub。' });
   // An unexpected failure from inside the handler is reported as a plain failure. Its own
   // text could hold a path, an address or a token, so none of it leaves the machine.
   const broken = createGithubNode({ run: async () => { throw new Error('secret ghp_abcdefghijklmnopqrstuvwxyz at /home/me'); } });
-  assert.deepEqual(await broken['github.account']({}, signal), { ok: false, reason: 'failed', message: '读取 GitHub 失败。' });
+  assert.deepEqual(await broken['github.account']({}, emit), { ok: false, reason: 'failed', message: '读取 GitHub 失败。' });
 });
 
 test('真实启动器按 gh 的输出归类失败原因，输出原文不回传', async t => {

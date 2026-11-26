@@ -4,6 +4,7 @@ import { createAgentDiagnostics } from '../../../plugins/agent-diagnostics.ts';
 import { createCliSessionDiscovery } from '../../../plugins/cli-session-discovery.ts';
 import { createExecutionServices } from '../../../plugins/executors.ts';
 import { createProjectDiscovery } from '../../../plugins/project-discovery.ts';
+import { createGithubNode } from '../../../plugins/github-node.ts';
 import { createTerminalHost } from '../../../plugins/terminal-host.ts';
 import { createLiveTerminalServices } from '../../../plugins/live-terminals.ts';
 import { createAgentArtifactLoader } from './agent-artifacts.ts';
@@ -127,6 +128,11 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
     {
       id: 'cli-session-discovery',
       handlers: cliSessions.handlers,
+    },
+    // Reads through the gh login of this machine. Nothing here starts an AI coding agent.
+    {
+      id: 'github',
+      handlers: createGithubNode(),
     },
   ]);
 }
