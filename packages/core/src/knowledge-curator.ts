@@ -508,10 +508,50 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   function linked(job:Job,page:KnowledgeEntry) {
     return job.layer===page.layer && job.projectId===page.projectId && job.knowledgeIds.includes(page.id);
   }
+  type SuggestedRelation = { id:string; sources:{ id:string; title:string }[]; denied?:true };
+  /** The pages the system links to this one, and why: each shares a source with it. A source that
+   *  made two pages ties them together with something to point at, which is what makes the link
+   *  the system's to suggest and the owner's to deny. Sources are read once for all the pages asked
+   *  about, so a list of many does not read them once per page. */
+  function suggestionsFor(pages:KnowledgeEntry[]) {
+    const all=jobs(), roots=meetingRoots(all), titles=meetingTitles();
+    const found=new Map<string,Map<string,{ id:string; title:string }[]>>();
+    for(const job of all){
+      const title=titles.get(roots.get(job.id) ?? job.id) ?? job.title;
+      for(const page of pages){
+        if(!linked(job,page)) continue;
+        const byPage=found.get(page.id) ?? new Map();
+        for(const id of job.knowledgeIds){
+          if(id===page.id) continue;
+          const sources=byPage.get(id) ?? [];
+          sources.push({ id:job.id, title });
+          byPage.set(id,sources);
+        }
+        found.set(page.id,byPage);
+      }
+    }
+    return (page:KnowledgeEntry):SuggestedRelation[] => {
+      const denied=new Set(page.excludedRelatedIds ?? []);
+      const rows=[...(found.get(page.id) ?? [])].map(([id,sources])=>({ id, sources }));
+      // The most shared sources first; pages that share one are told apart by id.
+      rows.sort((a,b)=>b.sources.length-a.sources.length||a.id.localeCompare(b.id));
+      // What the owner denied is kept apart and marked, so that the page can offer to allow it again.
+      return [...rows.filter(row=>!denied.has(row.id)), ...rows.filter(row=>denied.has(row.id)).map(row=>({ ...row, denied:true as const }))];
+    };
+  }
+  async function suggestedRelations(pageOrId:KnowledgeEntry|string, projectId?:string):Promise<SuggestedRelation[]> {
+    const page=typeof pageOrId==='string' ? await sourcePage(pageOrId,projectId) : pageOrId;
+    return suggestionsFor([page])(page);
+  }
+  /** The same for many pages at once: one reading of the sources, answered per page id. */
+  function suggestedRelationsFor(pages:KnowledgeEntry[]) {
+    const answer=suggestionsFor(pages);
+    return new Map(pages.map(page=>[page.id,answer(page)]));
+  }
   void rebuildIndex('knowledge: initialize local knowledge history').then(changed).catch(error => { gitState = { available: false, reason: error instanceof Error ? error.message : String(error) }; });
   const timer = setInterval(() => { void tick(); }, 2000); timer.unref();
   return {
-    status, addSource, rebuildIndex,
+    status, addSource, rebuildIndex, suggestedRelations, suggestedRelationsFor,
     renameMeeting(id: string, input: Record<string, unknown>) {
       if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
       if (typeof input.title !== 'string' || typeof input.expectedTitle !== 'string' || /[\r\n]/.test(input.title) ||

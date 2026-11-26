@@ -1434,6 +1434,14 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           } finally {res.off('close',abort);}
           return;
         }
+        // The pages the system links to this one, from the sources they share. A read: what the owner
+        // denied is in it too, marked, so that the page can offer to allow it again.
+        const pageRelations = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/relations$/);
+        if (pageRelations && method === 'GET') {
+          if (url.searchParams.size) throw new InputError('这条接口不接受参数');
+          const page = await app.knowledgeCurator.suggestedRelations(decodeURIComponent(pageRelations[1]!));
+          return json(res, 200, { items: page.map(row => ({ ...row, sources: row.sources.map(source => source.title).slice(0, 5) })) });
+        }
         const pageSources = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources(?:\/([^/]+))?$/);
         if (pageSources && method === 'GET') {
           const source = await app.knowledgeCurator.pageSources(
@@ -1483,7 +1491,17 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const projectId = layer === 'project' ? requiredText(input.projectId ?? previous.projectId, '项目') : undefined;
           if (input.title !== undefined && typeof input.title !== 'string') throw new InputError('标题必须为文本');
           if (input.content !== undefined && typeof input.content !== 'string') throw new InputError('内容必须为文本');
-          const entry = await app.knowledge().put({ ...(input.relatedIds === undefined ? {} : { relatedIds: input.relatedIds as string[] }), aliases: input.aliases as string[] | undefined, contentLocked: input.contentLocked as boolean | undefined, confirmedFacts: input.confirmedFacts as string | undefined, relevance: input.relevance as number | null | undefined, importance: input.importance as KnowledgeImportance | null | undefined, tags: input.tags as string[] | undefined, id, layer: layer as 'personal' | 'global' | 'project', title: input.title === undefined ? previous.title : requiredText(input.title, '标题'), content: input.content === undefined ? previous.content : requiredText(input.content, '内容'), ...(projectId ? { projectId } : {}) }, input.expectedUpdatedAt ?? previous.updatedAt, 'workbench');
+          // What the owner denied is a list of page ids and nothing else. The page saving it is the one
+          // the denials belong to, so an id equal to it is refused here as well as in the store.
+          if (input.excludedRelatedIds !== undefined) {
+            if (!Array.isArray(input.excludedRelatedIds) || input.excludedRelatedIds.length > 200) throw new InputError('排除的关联最多 200 个');
+            for (const value of input.excludedRelatedIds) {
+              if (typeof value !== 'string' || !/^[0-9a-f-]{36}$/.test(value)) throw new InputError('排除的关联编号无效');
+              if (value === id) throw new InputError('知识页不能排除自己');
+            }
+          }
+          const entry = await app.knowledge().put({ ...(input.relatedIds === undefined ? {} : { relatedIds: input.relatedIds as string[] }),
+            ...(input.excludedRelatedIds === undefined ? {} : { excludedRelatedIds: [...new Set(input.excludedRelatedIds as string[])] as string[] }), aliases: input.aliases as string[] | undefined, contentLocked: input.contentLocked as boolean | undefined, confirmedFacts: input.confirmedFacts as string | undefined, relevance: input.relevance as number | null | undefined, importance: input.importance as KnowledgeImportance | null | undefined, tags: input.tags as string[] | undefined, id, layer: layer as 'personal' | 'global' | 'project', title: input.title === undefined ? previous.title : requiredText(input.title, '标题'), content: input.content === undefined ? previous.content : requiredText(input.content, '内容'), ...(projectId ? { projectId } : {}) }, input.expectedUpdatedAt ?? previous.updatedAt, 'workbench');
           await app.knowledgeCurator.rebuildIndex(); app.events.publish('knowledge.changed', { id }); return json(res, 200, entry);
         }
         if (knowledge && method === 'DELETE') {

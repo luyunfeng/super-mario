@@ -34,7 +34,10 @@ export type KnowledgeImportance = 'P0' | 'P1' | 'P2' | 'P3';
 export type KnowledgeEditSource = 'workbench' | 'conversation' | 'feishu';
 export interface KnowledgeEntry { contentLocked?: boolean; factsEdit?: { source: KnowledgeEditSource; at: string }; confirmedFacts?: string; relevance?: number; importance?: KnowledgeImportance; aliases?: string[]; tags?: string[]; id: string; layer: KnowledgeLayer; title: string; content: string; projectId?: string; updatedAt: string;
   /** Other knowledge pages the owner or an assistant linked to this one, by id. */
-  relatedIds?: string[]; }
+  relatedIds?: string[];
+  /** Pages the owner said are not related, so the system stops suggesting them. The system's own
+   *  suggestions come from shared sources and are not stored; this is what it leaves out. */
+  excludedRelatedIds?: string[]; }
 export interface QuestionItem {
   question: string;
   header?: string;

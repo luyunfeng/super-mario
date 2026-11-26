@@ -252,6 +252,9 @@ export interface SystemActions {
   setKnowledgeImportance?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeAlias?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeRelation?(args: Record<string, unknown>): Promise<Json>;
+  /** The pages the system links to each of these, from the sources they share. The sources are read once
+   *  for the whole set. Those the owner denied are in it too, marked. */
+  suggestedRelationsFor?(pages: Awaited<ReturnType<KnowledgeBackend['list']>>): Map<string, { id: string; sources: { id: string; title: string }[]; denied?: boolean }[]>;
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   lookupKnowledgeSource?(url: unknown, view: 'pages' | 'attempts', projectId?: string, offset?: unknown): Promise<Json>;
@@ -639,20 +642,33 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (!actions?.modelRouting) throw new Error('按用途分模型不可用');
           return actions.modelRouting();
         }));
-        context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。query 也可检索知识页别名。tag 精确匹配页标签，可与关键词、importance（P0–P3）组合；minRelevance 按已记录相关度下限筛选。分析会议决定、背景或待跟进事项时，按会议主题检索当前作用域可见的知识，并核对来源。', async (args, signal) => {
+        context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。query 也可检索知识页别名。tag 精确匹配页标签，可与关键词、importance（P0–P3）组合；minRelevance 按已记录相关度下限筛选。结果里 related 是主人或助手加的关联，suggested 是系统按共同来源建议的关联并带来源标题，两者都只列本次结果内的页。建议是线索，不是已确认的事实，引用前先打开核对。分析会议决定、背景或待跟进事项时，按会议主题检索当前作用域可见的知识，并核对来源。', async (args, signal) => {
           signal.throwIfAborted();
           const backend = context.contributions.list('knowledge_backends').find(item => item.id === 'local');
           if (!backend) throw new Error('Local knowledge backend is unavailable');
           const pages = await backend.value.list(args as KnowledgeQuery);
-          if (!pages.some(page => page.relatedIds?.length)) return pages as unknown as Json;
+          if (!pages.some(page => page.relatedIds?.length) && !actions?.suggestedRelationsFor) return pages as unknown as Json;
           // Name a linked page only when it is itself in this result. The result has already
           // been narrowed to what this conversation may read, so a link that now points
-          // outside that range stays an id and reveals no title.
+          // outside that range stays an id and reveals no title. The same holds for the
+          // system's suggestions: a page outside this result is not named, and why it was
+          // suggested is not told either.
           const titles = new Map(pages.map(page => [page.id, page.title]));
-          return pages.map(page => ({ ...page, ...(page.relatedIds?.length ? { related: page.relatedIds.flatMap(id => {
-            const title = titles.get(id);
-            return title ? [{ id, title }] : [];
-          }) } : {}) })) as unknown as Json;
+          const suggestions = actions?.suggestedRelationsFor ? actions.suggestedRelationsFor(pages) : undefined;
+          return pages.map(page => {
+            const related = (page.relatedIds ?? []).flatMap(id => {
+              const title = titles.get(id);
+              return title ? [{ id, title }] : [];
+            });
+            // A link is told of even when its page is outside this result, as an id with no title.
+            const links = page.relatedIds?.length ? { related } : {};
+            const suggested = (suggestions?.get(page.id) ?? []).flatMap(row => {
+              const title = titles.get(row.id);
+              return title ? [{ id: row.id, title, sources: row.sources.map(source => source.title).slice(0, 3), ...(row.denied ? { denied: true } : {}) }] : [];
+            });
+            // A suggestion outside this result names nothing, not even that there is one.
+            return { ...page, ...links, ...(suggested.length ? { suggested } : {}) };
+          }) as unknown as Json;
         }, { layer: { type: 'string', enum: ['personal', 'global', 'project'] }, projectId: { type: 'string' }, query: { type: 'string' }, tag: { type: 'string' }, minRelevance: { type: 'integer', minimum: 0, maximum: 100 }, importance: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] } }));
       },
     },
@@ -693,9 +709,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeAlias!(args); },
           { id: { type: 'string' }, updatedAt: { type: 'string' }, alias: { type: 'string' }, action: { type: 'string', enum: ['add', 'remove'] } }));
         if (actions?.changeKnowledgeRelation) context.contribute('tools', 'knowledge_change_relation', tool('knowledge_change_relation',
-          '按用户明确要求关联或移除两个知识页。传本页 id、已读 updatedAt、目标页 relatedId 和 action。目标页须在当前范围可见；页面不能关联自己。',
+          '按用户明确要求处理两个知识页的关联。传本页 id、已读 updatedAt、目标页 relatedId 和 action。'
+          + 'add 和 remove 改主人自己加的关联，目标页须在当前范围可见，页面不能关联自己。'
+          + '系统还会按共同来源建议关联，见 knowledge_list 返回的 suggested。主人说其中某条不对时用 exclude，系统之后不再建议；主人改主意时用 allow。'
+          + '是否相关是主人的判断：只在主人明确说这条关联不对时才 exclude，不替主人排除，也不因为自己觉得不相关就排除。',
           async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeRelation!(args); },
-          { id: { type: 'string' }, updatedAt: { type: 'string' }, relatedId: { type: 'string' }, action: { type: 'string', enum: ['add', 'remove'] } }));
+          { id: { type: 'string' }, updatedAt: { type: 'string' }, relatedId: { type: 'string' }, action: { type: 'string', enum: ['add', 'remove', 'exclude', 'allow'] } }));
         if (actions?.changeKnowledgeTag) context.contribute('tools', 'knowledge_change_tag', tool('knowledge_change_tag',
           '按用户明确要求给指定知识页添加或移除一个标签。传入 knowledge_list 返回的 id 和 updatedAt；版本过期时重新核对。',
           async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeTag!(args); },

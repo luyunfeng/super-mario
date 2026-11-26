@@ -530,7 +530,7 @@ export async function createWorkbench(config: AppConfig) {
     const project = currentAgentInput()?.projectId ?? projectId;
     return view === 'attempts' ? knowledgeCurator.sourceAttemptsFromUrl(url, project, offset) : knowledgeCurator.pagesFromUrl(url, project, offset);
   },
-  confirmKnowledgeTodo, knowledgeActionStatus: (args) => knowledgeActionStatus(args, currentAgentInput()?.projectId ?? optionalText(args.projectId, '项目')), editConfirmedFacts: args => changeKnowledgeMetadata('facts', args), changeKnowledgeAlias: args => changeKnowledgeMetadata('alias', args), changeKnowledgeTag: args => changeKnowledgeMetadata('tag', args), changeKnowledgeRelation: args => changeKnowledgeMetadata('relation', args), setKnowledgeRelevance: args => changeKnowledgeMetadata('relevance', args), setKnowledgeImportance: args => changeKnowledgeMetadata('importance', args), knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId, handoffExcerpt) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId, handoffExcerpt), searchMeetings: (query, projectId, offset) => knowledgeCurator.searchMeetings(query, currentAgentInput()?.projectId ?? projectId, offset), meetingDay: (date, timezone, projectId, offset) => knowledgeCurator.meetingDay(date, timezone ?? briefing.settings().timezone, currentAgentInput()?.projectId ?? projectId, offset),
+  confirmKnowledgeTodo, knowledgeActionStatus: (args) => knowledgeActionStatus(args, currentAgentInput()?.projectId ?? optionalText(args.projectId, '项目')), editConfirmedFacts: args => changeKnowledgeMetadata('facts', args), changeKnowledgeAlias: args => changeKnowledgeMetadata('alias', args), changeKnowledgeTag: args => changeKnowledgeMetadata('tag', args), changeKnowledgeRelation: args => changeKnowledgeMetadata('relation', args), suggestedRelationsFor: pages => knowledgeCurator.suggestedRelationsFor(pages), setKnowledgeRelevance: args => changeKnowledgeMetadata('relevance', args), setKnowledgeImportance: args => changeKnowledgeMetadata('importance', args), knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId, handoffExcerpt) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId, handoffExcerpt), searchMeetings: (query, projectId, offset) => knowledgeCurator.searchMeetings(query, currentAgentInput()?.projectId ?? projectId, offset), meetingDay: (date, timezone, projectId, offset) => knowledgeCurator.meetingDay(date, timezone ?? briefing.settings().timezone, currentAgentInput()?.projectId ?? projectId, offset),
     knowledgeJobs: input => {
       const bound = currentAgentInput()?.projectId, requested = optionalText(input.projectId, '项目');
       if (bound && requested && requested !== bound) throw new InputError('跨作用域 projectId', 403);
@@ -2313,7 +2313,7 @@ export async function createWorkbench(config: AppConfig) {
       ...(backend.revision ? { revision: backend.revision.bind(backend) } : {}),
       list: query => backend.list(query), remove: id => backend.remove(id),
       async put(input, expectedUpdatedAt, editSource) {
-        const payload = { ...(input.aliases === undefined ? {} : { aliases: input.aliases }), ...(input.relatedIds === undefined ? {} : { relatedIds: input.relatedIds }), ...(input.contentLocked === undefined ? {} : { contentLocked: input.contentLocked }), ...(input.confirmedFacts === undefined ? {} : { confirmedFacts: input.confirmedFacts }), ...(input.relevance === undefined ? {} : { relevance: input.relevance }), ...(input.importance === undefined ? {} : { importance: input.importance }), ...(input.tags === undefined ? {} : { tags: input.tags }), layer: input.layer, title: input.title, content: input.content, ...(input.id === undefined ? {} : { id: input.id }), ...(input.projectId === undefined ? {} : { projectId: input.projectId }) };
+        const payload = { ...(input.aliases === undefined ? {} : { aliases: input.aliases }), ...(input.relatedIds === undefined ? {} : { relatedIds: input.relatedIds }), ...(input.excludedRelatedIds === undefined ? {} : { excludedRelatedIds: input.excludedRelatedIds }), ...(input.contentLocked === undefined ? {} : { contentLocked: input.contentLocked }), ...(input.confirmedFacts === undefined ? {} : { confirmedFacts: input.confirmedFacts }), ...(input.relevance === undefined ? {} : { relevance: input.relevance }), ...(input.importance === undefined ? {} : { importance: input.importance }), ...(input.tags === undefined ? {} : { tags: input.tags }), layer: input.layer, title: input.title, content: input.content, ...(input.id === undefined ? {} : { id: input.id }), ...(input.projectId === undefined ? {} : { projectId: input.projectId }) };
         const value = await plugins.invocations.invoke('knowledge.put', payload, async changed => {
           if (!changed || typeof changed !== 'object' || Array.isArray(changed)) throw new PluginCallError('知识钩子必须返回对象');
           for (const field of ['id', 'layer', 'projectId'] as const) if (changed[field] !== payload[field]) throw new PluginCallError('知识钩子不能改变归属或标识');
@@ -2434,9 +2434,33 @@ export async function createWorkbench(config: AppConfig) {
     const id = page.id;
     const targetId = requiredText(args.relatedId, '关联知识页');
     const add = args.action === 'add';
-    if (!add && args.action !== 'remove') throw new InputError('关联操作无效');
+    const exclude = args.action === 'exclude', allow = args.action === 'allow';
+    if (!add && args.action !== 'remove' && !exclude && !allow) throw new InputError('关联操作无效');
     if (targetId === id) throw new InputError('知识页不能关联自己');
     const linked = page.relatedIds ?? [];
+    if (exclude || allow) {
+      // The system's own suggestions, from shared sources, are not stored. What is stored is the
+      // owner's word that one of them is not a relation, which the system then leaves out.
+      const excluded = page.excludedRelatedIds ?? [];
+      if (exclude) {
+        // The page must be one the system links here at all. One already denied is in that list
+        // too, and answers below that it changed nothing.
+        const suggestedNow = await knowledgeCurator.suggestedRelations(page);
+        if (!suggestedNow.some(row => row.id === targetId)) throw new InputError('系统没有建议关联这一页', 404);
+        if (excluded.includes(targetId)) return { changed: false, id, relatedIds: linked, excludedRelatedIds: excluded, updatedAt: version };
+        if (excluded.length >= 200) throw new InputError('排除的关联最多 200 个');
+      } else {
+        if (!excluded.includes(targetId)) throw new InputError('这一页没有被排除', 404);
+      }
+      const next = exclude ? [...excluded, targetId] : excluded.filter(value => value !== targetId);
+      const route = store.get<MessageRoute>('message.routes', (currentAgentInput() ?? agent.currentInput())!.id);
+      const saved = await backend.put({ ...page, excludedRelatedIds: next }, version, route?.channel === 'feishu' ? 'feishu' : 'conversation');
+      const receipt = { changed: true, id, relatedIds: saved.relatedIds ?? [], excludedRelatedIds: saved.excludedRelatedIds ?? [], updatedAt: saved.updatedAt };
+      try { await knowledgeCurator.rebuildIndex(); }
+      catch { return { ...receipt, warning: '知识页已保存，知识索引刷新失败' }; }
+      finally { changed('knowledge.changed', { id }); }
+      return receipt;
+    }
     if (!add) {
       if (!linked.includes(targetId)) return { changed: false, id, relatedIds: linked, updatedAt: version };
     } else {

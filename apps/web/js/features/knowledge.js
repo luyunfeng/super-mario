@@ -161,6 +161,65 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
     paintRelated();
   });
   paintRelated();
+  // The system's own suggestions: pages that share a source with this one. They are not stored;
+  // what is stored is the owner's word that one is not a relation, which is saved at once, apart
+  // from the text, because it is a decision and not an edit.
+  const suggestedBox = h('div', { class: 'stack', 'aria-label': '系统建议的关联', 'aria-live': 'polite' });
+  let excludedIds = [...(entry?.excludedRelatedIds ?? [])];
+  let suggestions = [], saving = false;
+  async function deny(id) {
+    if (saving) return;
+    excludedIds = [...excludedIds.filter(value => value !== id), id];
+    await saveDenials();
+  }
+  async function allow(id) {
+    if (saving) return;
+    excludedIds = excludedIds.filter(value => value !== id);
+    await saveDenials();
+  }
+  async function saveDenials() {
+    // One at a time. A second save before the first answered would carry the version the first
+    // is about to replace, and its failure would put back what the first had kept.
+    saving = true;
+    suggestedBox.setAttribute('aria-busy', 'true');
+    try {
+      // Only the denials go with this save, so a draft in the other fields is neither sent nor lost.
+      const saved = await api.patch('/knowledge/' + encodeURIComponent(entry.id), { excludedRelatedIds: excludedIds, expectedUpdatedAt: reviewed.updatedAt });
+      excludedIds = [...(saved.excludedRelatedIds ?? [])];
+      // The list read when the editor opened says which page the system links here. Which of them
+      // are denied is the page's own record, so the list is marked from it rather than read again.
+      suggestions = suggestions.map(row => ({ ...row, ...(excludedIds.includes(row.id) ? { denied: true } : { denied: undefined }) }));
+      // A later save of the text must not find a version it did not read: it reads this one.
+      reviewed = { ...reviewed, updatedAt: saved.updatedAt, excludedRelatedIds: excludedIds };
+      paintSuggested();
+    } catch (error) {
+      // Nothing was kept. The list shows what is still on record, and says why.
+      excludedIds = [...(reviewed.excludedRelatedIds ?? [])];
+      paintSuggested(error.message);
+    } finally { saving = false; suggestedBox.removeAttribute('aria-busy'); }
+  }
+  function paintSuggested(failure) {
+    const live = suggestions.filter(row => !row.denied);
+    const denied = suggestions.filter(row => row.denied);
+    replace(suggestedBox,
+      failure ? h('p', { class: 'small', role: 'alert' }, '没有保存：' + failure) : null,
+      live.length ? live.map(row => h('div', { class: 'row row--between row--wrap', dataset: { suggested: row.id } },
+        h('div', { class: 'stack' },
+          h('a', { href: router.href('memory') + '?entry=' + encodeURIComponent(row.id) }, pageById.get(row.id)?.title ?? '知识页'),
+          h('p', { class: 'small muted' }, '共同来源：' + row.sources.join('、'))),
+        Button({ label: '不是关联', size: 'sm', onClick: () => deny(row.id) }))) : null,
+      denied.length ? h('p', { class: 'small muted' }, '已排除：') : null,
+      denied.length ? denied.map(row => h('div', { class: 'row row--between row--wrap', dataset: { denied: row.id } },
+        h('span', { class: 'muted' }, pageById.get(row.id)?.title ?? '知识页'),
+        Button({ label: '恢复建议', size: 'sm', onClick: () => allow(row.id) }))) : null,
+      !live.length && !denied.length ? h('p', { class: 'muted small' }, '系统没有从共同来源找到其他相关的知识页。') : null);
+  }
+  if (entry) {
+    suggestedBox.textContent = '正在读取…';
+    api.get('/knowledge/' + encodeURIComponent(entry.id) + '/relations')
+      .then(value => { suggestions = value.items ?? []; paintSuggested(); })
+      .catch(() => { suggestions = []; paintSuggested('系统建议读取失败，请稍后再试。'); });
+  }
   // Keep each field's last reviewed value, so accepting a concurrent change
   // cannot replace someone else's edits with untouched values from this form.
   const fields = [title, content, facts, tags, importance, relevance, aliases];
@@ -398,7 +457,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), h('div', { class: 'field' }, h('span', { class: 'field__label' }, '关联的知识页'), h('p', { class: 'field__hint' }, '表示两条知识互相参照。保存后生效。'), relatedList, relatedPick), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, endLine, mayQuote() ? ask : null, canReadEntry() ? handoff : null, canReadEntry), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), h('div', { class: 'field' }, h('span', { class: 'field__label' }, '关联的知识页'), h('p', { class: 'field__hint' }, '表示两条知识互相参照。保存后生效。'), relatedList, relatedPick), entry && h('div', { class: 'field' }, h('span', { class: 'field__label' }, '系统建议的关联'), h('p', { class: 'field__hint' }, '和这条知识出自同一份来源的知识页。这是线索，不是已确认的事实。点「不是关联」后系统不再建议。'), suggestedBox), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, endLine, mayQuote() ? ask : null, canReadEntry() ? handoff : null, canReadEntry), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

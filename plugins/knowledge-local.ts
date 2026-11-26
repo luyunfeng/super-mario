@@ -40,6 +40,9 @@ function validateEntry(entry: KnowledgeEntry): void {
     throw Object.assign(new Error('关联条目最多 50 个，且不能关联自己'), { status: 400 });
   }
   for (const id of entry.relatedIds ?? []) safeId(id);
+  if (entry.excludedRelatedIds !== undefined && (!Array.isArray(entry.excludedRelatedIds) || entry.excludedRelatedIds.length > 200 || entry.excludedRelatedIds.some(id => id === entry.id)))
+    throw Object.assign(new Error('排除的关联最多 200 个，且不能排除自己'), { status: 400 });
+  for (const id of entry.excludedRelatedIds ?? []) safeId(id);
   if (entry.confirmedFacts !== undefined && (typeof entry.confirmedFacts !== 'string' || entry.confirmedFacts.length > 16000))
     throw Object.assign(new Error('已确认事实须为不超过 16000 字的文本'), { status: 400 });
   validateRelevance(entry.relevance);
@@ -221,6 +224,10 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
       // Links to other pages are kept unless this write names them. An empty list clears them.
       const relatedIds = input.relatedIds === undefined ? prior?.relatedIds : [...new Set(input.relatedIds)];
       if (relatedIds?.length) entry.relatedIds = relatedIds;
+      // Kept like the links are: left alone by a write that does not name it, so that an edit of
+      // the text does not give back a suggestion the owner denied.
+      const excludedRelatedIds = input.excludedRelatedIds === undefined ? prior?.excludedRelatedIds : [...new Set(input.excludedRelatedIds)];
+      if (excludedRelatedIds?.length) entry.excludedRelatedIds = excludedRelatedIds;
       const { content, ...metadata } = entry;
       const temporary = join(directory, `.${randomUUID()}.tmp`);
       // Rename publishes a complete file. A failed index update is repaired by list().
