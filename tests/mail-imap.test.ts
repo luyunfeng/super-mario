@@ -40,6 +40,9 @@ function server(boxes: Box[], messages: Record<string, Message[]> = {}, options:
     // Listing folders never downloads an attachment. The method is here because the
     // connection type has it, and this test has no attachment to give.
     async download() { return {}; },
+    // Listing folders keeps no copy of anything. The method is here because the connection
+    // type has it.
+    async append() { return false; },
     async logout() { loggedOut++; if (options.failLogout) throw options.failLogout; },
   };
   return { client, opened, readOnly, fetched, loggedOut: () => loggedOut };

@@ -23,6 +23,7 @@ function fakeOpen(options: { fail?: Error; onOpen?: () => void } = {}) {
         yield { uid: 1, envelope: { subject: '一封邮件', from: [{ address: 'a@example.invalid' }], messageId: '<m@example.invalid>' }, flags: new Set<string>() };
       },
       async download() { return {}; },
+      async append() { return false; },
       async logout() {},
     };
     return client;

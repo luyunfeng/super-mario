@@ -27,6 +27,7 @@ test('渠道页可添加邮箱、按域名填好服务器、检查连接后看�
           bodyStructure: { childNodes: [{ disposition: 'attachment', dispositionParameters: { filename: 'report.xlsx' } }] } };
       },
       async download() { return {}; },
+      async append() { return false; },
       async logout() {},
     };
     return client;

@@ -177,6 +177,8 @@ export interface ImapClient {
   fetch(range: string, query: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
   /** Streams one part of one message, decoded. Resolves without content when there is none. */
   download(uid: number, part: string, options: { uid: boolean; maxBytes: number }): Promise<{ content?: AsyncIterable<Uint8Array>; meta?: Record<string, unknown> }>;
+  /** Puts a message into a folder, as a mail program keeps a copy of what it sent. */
+  append(path: string, content: Uint8Array, options: { flags: string[]; date: Date }): Promise<unknown>;
   logout(): Promise<void>;
 }
 

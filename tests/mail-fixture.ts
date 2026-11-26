@@ -34,6 +34,8 @@ export type FakeServer = {
   fetched: Array<{ range: string; query: Record<string, unknown> }>;
   /** Every attachment download. */
   downloaded: Array<{ uid: number; part: string; maxBytes: number }>;
+  /** Every message put into a folder, as the copy of one that was sent. */
+  appended: Array<{ path: string; content: Uint8Array; flags: string[]; date: Date }>;
   logouts: () => number;
 };
 
@@ -41,6 +43,7 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
   const opened: FakeServer['opened'] = [];
   const fetched: FakeServer['fetched'] = [];
   const downloaded: FakeServer['downloaded'] = [];
+  const appended: FakeServer['appended'] = [];
   let logouts = 0;
   // The folder that is selected now. fetch() and download() read from it, as on a real server.
   let selected: FakeFolder | undefined;
@@ -99,6 +102,11 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
       return { content: pieces(), meta: { size: bytes.byteLength } };
     },
     async logout() { logouts++; },
+    /** Keeps what was put in a folder. A test that sends reads it back from here. */
+    async append(path, content, appendOptions) {
+      appended.push({ path, content: new Uint8Array(content), flags: [...appendOptions.flags], date: new Date(appendOptions.date) });
+      return { path };
+    },
   };
-  return { client, opened, fetched, downloaded, logouts: () => logouts };
+  return { client, opened, fetched, downloaded, appended, logouts: () => logouts };
 }

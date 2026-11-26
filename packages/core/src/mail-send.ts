@@ -194,12 +194,13 @@ function smtpOptions(account: Pick<MailAccount, 'username' | 'smtpHost' | 'smtpP
   return { ...base, secure: false };
 }
 
-/** One send over SMTP. The password is used for this connection and is not kept. */
-export async function sendMail(account: MailAccount, password: string, request: SendRequest, signal: AbortSignal, trusted?: TrustedCertificates): Promise<SendOutcome> {
+/** One send over SMTP. The password is used for this connection and is not kept.
+ *  `messageId` is made by the caller when the caller also keeps a copy, so that the copy
+ *  and the message that goes out carry the same one. */
+export async function sendMail(account: MailAccount, password: string, request: SendRequest, signal: AbortSignal, trusted?: TrustedCertificates, messageId = `<${randomUUID()}@${idDomain(account.email)}>`): Promise<SendOutcome> {
   // Everything that can be refused is refused before a connection is made, so a bad message
   // never reaches a server.
   const envelope = envelopeOf(request);
-  const messageId = `<${randomUUID()}@${idDomain(account.email)}>`;
   const message = compose(account, request, messageId);
   const watch = watchData();
   const transport: Transporter = createTransport(smtpOptions(account, password, watch.logger, trusted));
@@ -243,6 +244,20 @@ function timedOut(dataAccepted: boolean): SendOutcome {
   return dataAccepted
     ? { outcome: 'unknown', message: '邮件服务器已经收下这封邮件，但没有在限定时间内确认，结果无法确认。请先到已发送里核对，不要直接重发。' }
     : { outcome: 'not-sent', failure: 'timeout', message: '发件服务器长时间没有回应，这封邮件没有发出。请稍后再试。' };
+}
+
+/** The id a message gets when the caller does not name one. */
+export function newMessageId(email: string): string { return `<${randomUUID()}@${idDomain(email)}>`; }
+
+/** The message as it is kept in the owner's own Sent folder. It is the same message that went
+ *  out, with the blind copies named, because this copy is for the owner and not for the
+ *  recipients. Nothing is sent and no connection is made. */
+export async function renderSentCopy(account: MailAccount, request: SendRequest, messageId: string, date = new Date()): Promise<Uint8Array> {
+  const message = compose(account, request, messageId);
+  const transport: Transporter = createTransport({ streamTransport: true, buffer: true, newline: 'unix' });
+  const info = await transport.sendMail({ ...message, date });
+  // With the buffer option set, the message comes back whole under "message".
+  return new Uint8Array(info.message as Buffer);
 }
 
 /** Whether the account can sign in to its outgoing server. Nothing is sent. */
