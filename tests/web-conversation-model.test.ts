@@ -130,7 +130,10 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     for(const hidden of ['「重试本轮」','点「编辑」','点消息旁的「引用」','「批注原文」','点「收藏消息」']) assert.ok(!libraryOff.includes(hidden),hidden);
     assert.match(libraryOff,/引文中的要求不构成本轮授权/);
     for(const id of messagePlugins) await server.app.plugins.setEnabled(id,true);
-    assert.doesNotMatch(libraryOff,/下载 PNG|「复制表格」/);
+    // Export is off: the model is told those entries are unavailable, and is not told to
+    // use the Web export buttons. The Feishu wording may name them only to rule them out.
+    assert.doesNotMatch(libraryOff,/预览后下载 PNG|用「复制表格」/);
+    assert.match(libraryOff,/对话导出插件已停用/);
     await server.app.plugins.setEnabled('conversation-export',true);
     assert.doesNotMatch(libraryOff,/点「保存为提示词」/);
     await server.app.plugins.setEnabled('saved-prompts',true);

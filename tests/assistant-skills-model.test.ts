@@ -4624,10 +4624,12 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     };
     const exportOn=await askPrivately(exportQuestion);
     assert.match(exportOn,/点该表的「复制表格」/);
+    assert.doesNotMatch(exportOn,/对话导出插件已停用/);
     await api('/plugins/conversation-export',{enabled:false});
     const exportOff=await askPrivately(exportQuestion+'，插件已停用');
-    assert.doesNotMatch(exportOff,/复制表格|导出对话预览/);
-    assert.match(exportOff,/对话导出插件已停用/);
+    // The base prompt still names the buttons, so the model is told they are unavailable.
+    assert.match(exportOff,/对话导出插件已停用。上面关于「复制表格」和「导出对话」的入口当前不可用/);
+    assert.match(exportOff,/手动选取可见文字复制/);
     await api('/plugins/conversation-export',{enabled:true});
     const editQuestion='请核对合成中心收件的编辑历史，编号 '+center;
     assert.equal(await ask(editQuestion),'采集到的上一版是合成旧正文。');
