@@ -104,7 +104,7 @@ function address(value: unknown): { name: string; email: string } {
 }
 const addresses = (value: unknown) => Array.isArray(value) ? value.map(address).filter(item => item.email) : [];
 /** The date as an ISO instant, or undefined when the header is unreadable. It is never guessed. */
-function date(value: unknown): string | undefined {
+export function mailDate(value: unknown): string | undefined {
   if (typeof value !== 'string' && !(value instanceof Date)) return undefined;
   const time = new Date(value as string).getTime();
   return Number.isFinite(time) ? new Date(time).toISOString() : undefined;
@@ -231,7 +231,7 @@ export async function readMailboxes(account: MailAccount, signal: AbortSignal, o
             messageId: typeof envelope.messageId === 'string' ? envelope.messageId.slice(0, 998) : '',
             subject: subjectOf(envelope.subject),
             from: address(first(envelope.from) ?? first(envelope.sender)),
-            to: addresses(envelope.to), date: date(message.internalDate ?? envelope.date) ?? '',
+            to: addresses(envelope.to), date: mailDate(message.internalDate ?? envelope.date) ?? '',
             hasAttachments: hasAttachments(message.bodyStructure),
             ...flagsOf(message.flags),
           });

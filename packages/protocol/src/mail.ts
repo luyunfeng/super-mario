@@ -81,14 +81,13 @@ export interface MailSummary {
 
 /** An attachment of a message, as far as it is known without reading the message. */
 export interface MailAttachment {
-  /** What names the attachment when it is saved: its place in the message and what it is. */
+  /** What names the attachment when it is saved. It is worked out from the attachment's
+   *  place in the message and from its bytes, and is only meaningful for that message. */
   id: string;
   filename: string;
   mimeType: string;
-  /** How many bytes it takes up once decoded, when the server says. */
+  /** How many bytes it takes up once decoded. */
   size: number;
-  /** The part of the message it is, for fetching it on its own. */
-  part: string;
 }
 
 /** One message in full. Reading it does not mark it as read. */
@@ -97,9 +96,12 @@ export interface MailMessage extends MailSummary {
   /** The Message-IDs this one answers, and the chain it belongs to, for replying in turn. */
   inReplyTo: string;
   references: string[];
+  /** Plain text, or the HTML as plain words when the message has no text part. */
   text: string;
   html: string;
-  /** True when the message is larger than one read takes. The text is empty then. */
-  tooLarge: boolean;
+  /** True when the text was longer than one read gives and only its beginning is here. */
+  textTruncated: boolean;
   attachments: MailAttachment[];
+  /** How many attachments the message has. More than are listed when there are very many. */
+  attachmentCount: number;
 }
