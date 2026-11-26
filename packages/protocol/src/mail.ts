@@ -90,6 +90,8 @@ export interface MailSummary {
   seen: boolean;
   answered: boolean;
   flagged: boolean;
+  /** The first words of the body, for a list. Empty when the body was not read for it. */
+  snippet?: string;
 }
 
 /** An attachment of a message, as far as it is known without reading the message. */

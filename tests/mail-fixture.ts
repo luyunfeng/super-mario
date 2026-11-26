@@ -132,6 +132,19 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
           const raw = message.raw ?? new Uint8Array();
           answer.source = Buffer.from(raw.slice(0, limit));
         }
+        // Parts are asked for by name with a start and a length. The body of a message is
+        // everything after its headers, as a real server gives it.
+        if (Array.isArray(query.bodyParts) && query.bodyParts.length) {
+          const raw = message.raw ?? new Uint8Array();
+          const text = new TextDecoder().decode(raw);
+          const parts = new Map<string, Buffer>();
+          for (const asked of query.bodyParts as Array<{ key: string; start?: number; maxLength?: number }>) {
+            const whole = asked.key.toUpperCase() === 'HEADER' ? (text.split(/\r\n\r\n/)[0] ?? '') + '\r\n' : text.slice((text.indexOf('\r\n\r\n') + 4) || text.length);
+            const bytes = Buffer.from(whole, 'utf8');
+            parts.set(asked.key.toUpperCase(), bytes.subarray(asked.start ?? 0, (asked.start ?? 0) + (asked.maxLength ?? bytes.byteLength)));
+          }
+          answer.bodyParts = parts;
+        }
         yield answer;
       }
     },

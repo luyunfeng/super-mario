@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LOCAL_BATCH, LOCAL_BUDGET, searchFolder, SEARCH_MAX, SEARCH_PAGE, summaryOf } from '../packages/core/src/mail-search.ts';
+import { LOCAL_BATCH, LOCAL_BUDGET, searchFolder, SEARCH_MAX, SEARCH_PAGE, SNIPPET_CHARS, snippetOf, SNIPPET_MESSAGES, summaryOf } from '../packages/core/src/mail-search.ts';
 import { fakeMailServer, type FakeMessage } from './mail-fixture.ts';
 
 const account = { id: 'acc', email: 'someone@qq.com' };
@@ -130,4 +130,46 @@ test('摘要带着已读、已标记和附件标记，日期读不出来时留�
   assert.equal(summary.hasAttachments, true);
   // A row without an envelope gives no summary rather than a guessed one.
   assert.equal(summaryOf('acc', 'INBOX', { uid: 4 }), undefined);
+});
+
+test('列表里的摘要：取正文开头的文字，多行并成一行，HTML 去标签，超长截到词边并加省略号', () => {
+  const bytes = (text: string) => Buffer.from(text, 'utf8');
+  assert.equal(snippetOf(undefined), '');
+  assert.equal(snippetOf(new Uint8Array()), '');
+  assert.equal(snippetOf(bytes('请确认周四的评审时间。\r\n谢谢。')), '请确认周四的评审时间。 谢谢。');
+  // A body that is HTML comes as its words.
+  assert.equal(snippetOf(bytes('<html><body><p>第一段</p><p>第二段</p></body></html>')), '第一段 第二段');
+  // A cut in the middle of a character does not show a wrong one.
+  const whole = Buffer.from('中文字符', 'utf8');
+  assert.equal(snippetOf(whole.subarray(0, whole.byteLength - 1)), '中文字');
+  // A long body is cut near a word boundary, and says there is more.
+  const long = snippetOf(bytes(Array.from({ length: 60 }, (_, index) => 'word' + index).join(' ')));
+  assert.ok(long.endsWith('…'));
+  assert.ok(long.length <= SNIPPET_CHARS + 1, long);
+  assert.match(long, / word\d+…$/);
+  // A body with no words to break on is cut where it is.
+  const unbroken = snippetOf(bytes('x'.repeat(400)));
+  assert.equal(unbroken, 'x'.repeat(SNIPPET_CHARS) + '…');
+  // A line that ends on a separator does not end on it.
+  assert.ok(!snippetOf(bytes('a'.repeat(150) + ', ' + 'b'.repeat(50))).match(/[,，]\s*…$/));
+  assert.equal(SNIPPET_MESSAGES, 20);
+});
+
+test('搜索结果里最新的邮件带正文摘要，只读正文开头，不下载整封', async () => {
+  const raw = (text: string) => Buffer.from('From: a@example.invalid\r\nSubject: s\r\n\r\n' + text, 'utf8');
+  const messages = Array.from({ length: 25 }, (_, index) => ({ ...message(index + 1, '邮件 ' + index), raw: raw('正文 ' + index + ' ' + '很长的一句话。'.repeat(60)) }));
+  const server = fakeMailServer({ folders: [{ path: 'INBOX', messages }] });
+  const page = await searchFolder(server.client, account, {}, signal());
+  // The newest twenty carry a snippet, each the start of its own body.
+  const withSnippet = page.messages.filter(item => item.snippet !== undefined);
+  assert.equal(withSnippet.length, SNIPPET_MESSAGES);
+  assert.equal(withSnippet[0]!.snippet!.startsWith('正文 24 很长的一句话。'), true);
+  assert.ok(withSnippet[0]!.snippet!.endsWith('…'));
+  // It was asked as a part with a limit, and the whole message was not taken for it.
+  const asked = server.fetched.find(call => Array.isArray(call.query.bodyParts))!;
+  assert.deepEqual(asked.query.bodyParts, [{ key: 'TEXT', start: 0, maxLength: 2048 }]);
+  assert.equal(asked.query.source, undefined);
+  assert.ok(asked.range.split(',').length <= SNIPPET_MESSAGES);
+  // Every folder the search opened was opened read-only.
+  assert.ok(server.opened.every(opened => opened.readOnly));
 });

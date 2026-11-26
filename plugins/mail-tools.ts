@@ -51,7 +51,8 @@ export function searchAnswer(result: unknown): string {
   const page = result as { messages: Array<Record<string, unknown>>; hasMore?: boolean; nextBeforeUid?: number; headersOnly?: boolean; failed?: Array<{ name: string; message: string }> };
   const lines: string[] = [];
   for (const message of page.messages) {
-    lines.push(`- uid=${message.uid} account=${message.account} mailbox=${message.mailbox} date=${message.date || '?'} from=${formatAddress(message.from)} subject="${message.subject}"`);
+    const snippet = typeof message.snippet === 'string' && message.snippet.trim() ? ` snippet="${message.snippet}"` : '';
+    lines.push(`- uid=${message.uid} account=${message.account} mailbox=${message.mailbox} date=${message.date || '?'} from=${formatAddress(message.from)} subject="${message.subject}"${snippet}`);
   }
   const failed = page.failed ?? [];
   if (lines.length) {
@@ -105,7 +106,7 @@ export function mailTools(actions: MailActions): Tool[] {
   };
   const search: Tool = {
     name: 'mail_search',
-    description: '搜索邮件，返回主题、发件人、时间和用于读取正文的 uid。先 mail_accounts 取 account；不带 account 时搜所有邮箱的收件箱。mailbox 默认 INBOX。Gmail 账号的 query 用 Gmail 搜索语法（from:、subject:、has:attachment、newer_than:7d），其他邮箱按词语搜正文和邮件头。有些邮箱服务器（如网易 163）搜不到任何词，这时会改为在主题、发件人和收件人里匹配，并在结果里说明没有查正文。这种匹配把 query 按空格拆成几个词，每个词都要出现，所以这时用短词比用整句更容易找到。结果从新到旧，一页默认 20 封，可用 before_uid 往前翻。只读，不改动邮件。',
+    description: '搜索邮件，返回主题、发件人、时间、正文开头的一句摘要和用于读取正文的 uid。摘要只是正文的开头，最多约 160 字，带 … 表示后面还有；要引用内容、回答细节或回复时必须用 mail_read 读整封，不要只凭摘要作答。先 mail_accounts 取 account；不带 account 时搜所有邮箱的收件箱。mailbox 默认 INBOX。Gmail 账号的 query 用 Gmail 搜索语法（from:、subject:、has:attachment、newer_than:7d），其他邮箱按词语搜正文和邮件头。有些邮箱服务器（如网易 163）搜不到任何词，这时会改为在主题、发件人和收件人里匹配，并在结果里说明没有查正文。这种匹配把 query 按空格拆成几个词，每个词都要出现，所以这时用短词比用整句更容易找到。结果从新到旧，一页默认 20 封，可用 before_uid 往前翻。只读，不改动邮件。',
     parameters: {
       type: 'object',
       properties: {

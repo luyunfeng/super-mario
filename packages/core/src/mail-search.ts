@@ -1,5 +1,6 @@
 import type { MailAddress, MailSummary, SearchRequest } from '../../protocol/src/mail.ts';
 import { hasAttachments, mailDate, searchable, type ImapClient } from './mail-imap.ts';
+import { htmlToText } from './mail-message.ts';
 
 /** How many matches one page holds unless fewer are asked for, and the most it may hold. */
 export const SEARCH_PAGE = 20;
@@ -47,7 +48,31 @@ export function summaryOf(account: string, mailbox: string, row: Record<string, 
   };
 }
 
-/** The summaries of the messages with these UIDs. They come back sorted by UID, lowest first. */
+/** How much of a body is taken to make a snippet, and how long a snippet is. */
+export const SNIPPET_BYTES = 2048;
+export const SNIPPET_CHARS = 160;
+/** The most messages of one page that a snippet is read for. Reading every body would make a
+ *  search slow for the sake of a line of preview. */
+export const SNIPPET_MESSAGES = 20;
+
+/** The first words of a body, as one line. What is taken may end inside a tag or a character,
+ *  because it was cut short on purpose, so the end is tidied and never shown half done. */
+export function snippetOf(body: unknown): string {
+  if (!(body instanceof Uint8Array) || !body.byteLength) return '';
+  // A cut byte at the end would decode into a wrong character. One incomplete sequence is dropped.
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(body).replace(/\uFFFD+$/, '');
+  const plain = /<[^>]+>/.test(text) ? htmlToText(text) : text;
+  const line = plain.split(/\r?\n/).map(part => part.trim()).filter(Boolean).join(' ');
+  // A line that was cut ends with a half word. It is cut back to the last space when there is
+  // one not too far back, and says with an ellipsis that there is more.
+  if (line.length <= SNIPPET_CHARS) return line;
+  const cut = line.slice(0, SNIPPET_CHARS);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > SNIPPET_CHARS / 2 ? cut.slice(0, lastSpace) : cut).replace(/[,;:，；：]\s*$/, '') + '…';
+}
+
+/** The summaries of the messages with these UIDs. They come back sorted by UID, lowest first.
+ *  The newest of them carry a snippet of the body, read on their own and only in part. */
 async function summaries(client: ImapClient, account: string, mailbox: string, uids: number[]): Promise<MailSummary[]> {
   const messages: MailSummary[] = [];
   if (!uids.length) return messages;
@@ -55,7 +80,24 @@ async function summaries(client: ImapClient, account: string, mailbox: string, u
     const summary = summaryOf(account, mailbox, row);
     if (summary) messages.push(summary);
   }
-  return messages.sort((a, b) => a.uid - b.uid);
+  const sorted = messages.sort((a, b) => a.uid - b.uid);
+  // Only the newest are read for a snippet, and only the start of each body.
+  const newest = sorted.slice(-SNIPPET_MESSAGES).map(message => message.uid);
+  if (newest.length) {
+    const snippets = new Map<number, string>();
+    try {
+      for await (const row of client.fetch(newest.join(','), { uid: true, bodyParts: [{ key: 'TEXT', start: 0, maxLength: SNIPPET_BYTES }] })) {
+        // The parts come back in a Map, keyed by the part that was asked for, in capitals.
+        const bytes = row.bodyParts instanceof Map ? row.bodyParts.get('TEXT') : undefined;
+        snippets.set(Number(row.uid), snippetOf(bytes));
+      }
+    } catch {
+      // A body that cannot be read in part leaves the summary without a snippet. The search
+      // itself is not failed for the sake of a preview.
+    }
+    for (const message of sorted) { const snippet = snippets.get(message.uid); if (snippet) message.snippet = snippet; }
+  }
+  return sorted;
 }
 
 /** Whether every word of the query is in the subject, or in the name or the address of a

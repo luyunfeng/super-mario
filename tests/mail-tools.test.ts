@@ -86,6 +86,9 @@ test('四个邮件工具都注册了，提示词写明审批、不标记已读�
   assert.match(search, /没有查正文/);
   // How the fallback matches is said, so that a long sentence is not tried and found missing.
   assert.match(search, /按空格拆成几个词，每个词都要出现/);
+  // The snippet is said to be the start of a body, so that it is not taken for the whole.
+  assert.match(search, /正文开头的一句摘要/);
+  assert.match(search, /不要只凭摘要作答/);
   assert.match(search, /before_uid/);
   assert.match(search, /只读，不改动邮件/);
 
@@ -129,6 +132,9 @@ test('mail_search 搜一个邮箱：结果带着下一步要用的编号，最�
   assert.match(found.text, /uid=1 account=\S+ mailbox=INBOX date=2026-11-21/);
   assert.match(found.text, /from=finance@example.invalid/);
   assert.match(found.text, /subject="十月的报表"/);
+  // The start of the body comes with it, so that a question can often be answered from here.
+  assert.match(found.text, /the report is attached\./);
+  assert.doesNotMatch(found.text, /code-one|code-two/);
   assert.doesNotMatch(found.text, /没有查邮件正文/, 'the server searched');
   // Listing without a word is newest first.
   const all = await f.call('mail_search', { account: f.first.id });
