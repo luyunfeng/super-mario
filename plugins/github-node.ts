@@ -173,6 +173,78 @@ async function reply<T>(read: () => Promise<T>): Promise<Json> {
     return { ok: false, reason: 'failed', message: new GhError('failed').message } as Json;
   }
 }
+/** Issues and pull requests that mention the owner, or that await their review. */
+export async function ghSearch(run: GhRun, signal: AbortSignal, options: { query: string; limit: number }): Promise<{ items: { repository: string; number: number; title: string; state: string; url: string; pull: boolean; updatedAt: string }[]; total: number }> {
+  const query = options.query.replace(/[\r\n\u0000-\u001f]/g, ' ').trim().slice(0, 256);
+  if (!query || query.startsWith('-')) throw new GhError('bad_response');
+  const limit = Math.min(Math.max(options.limit, 1), 30);
+  const list = await json(run, 'search/issues?q=' + encodeURIComponent(query) + '&per_page=' + limit + '&sort=updated', signal);
+  // The search endpoint answers with an object that holds the items and a total.
+  const row = object(list);
+  if (!row || !Array.isArray(row.items)) throw new GhError('bad_response');
+  const items = row.items.flatMap(entry => {
+      const item = object(entry), repo = object(item?.repository), pull = item?.pull_request !== undefined;
+      const number = integer(item?.number);
+      const name = text(repo?.full_name, 200);
+      if (!item || !number || !name) return [];
+      return [{ repository: name, number, title: text(item.title, 512), state: text(item.state, 20),
+        url: 'https://github.com/' + name + (pull ? '/pull/' : '/issues/') + number, pull, updatedAt: typeof item.updated_at === 'string' ? item.updated_at : '' }];
+  });
+  return { items, total: integer(row.total_count) ?? items.length };
+}
+
+/** The diff of a pull request, or one file of it. GitHub answers a pull request diff as text. */
+export async function ghDiff(run: GhRun, signal: AbortSignal, repository: string, number: number, path?: string): Promise<{ text: string; truncated: boolean }> {
+  const repo = repositoryOf(repository);
+  if (!Number.isSafeInteger(number) || number < 1 || number > 10_000_000) throw new GhError('bad_response');
+  if (path !== undefined && (typeof path !== 'string' || path.length > 500 || path.startsWith('/') || path.includes('..'))) throw new GhError('bad_response');
+  signal.throwIfAborted();
+  let raw: string;
+  try {
+    raw = await run(['api', '--method', 'GET', 'repos/' + repo + '/pulls/' + number, '--header', 'Accept: application/vnd.github.diff'], { signal });
+  } catch (error) {
+    if (error instanceof GhError) throw error;
+    throw new GhError('failed');
+  }
+  // A file is one section of the diff. It is cut out by its headers, so the text is not re-parsed.
+  const text = path ? diffFile(raw, path) : raw;
+  const limit = 60_000;
+  const chars = Array.from(text);
+  return { text: chars.length > limit ? chars.slice(0, limit - 1).join('') + '…' : text, truncated: chars.length > limit };
+}
+
+function diffFile(diff: string, path: string): string {
+  // Each file of a GitHub pull request diff starts with its own "diff --git" line.
+  const sections = diff.split(/^(?=diff --git )/m);
+  const wanted = sections.find(section => {
+    const header = section.split('\n').find(line => line.startsWith('+++ ')) ?? '';
+    // The name follows "b/", up to a tab that GitHub adds before a timestamp.
+    const name = header.slice(4).replace(/^"b\//, '').replace(/^b\//, '').replace(/\t.*$/, '').replace(/"$/, '').trim();
+    return name === path;
+  });
+  if (!wanted) throw new GhError('bad_response');
+  return wanted;
+}
+
+/** The check runs of a pull request's head, newest first. */
+export async function ghChecks(run: GhRun, signal: AbortSignal, repository: string, number: number): Promise<{ ref: string; state: string; items: { name: string; state: string; conclusion: string; url: string }[] }> {
+  const repo = repositoryOf(repository);
+  if (!Number.isSafeInteger(number) || number < 1 || number > 10_000_000) throw new GhError('bad_response');
+  const pull = (await json(run, 'repos/' + repo + '/pulls/' + number, signal)) as Row;
+  const head = object(pull?.head);
+  if (typeof head?.sha !== 'string' || !/^[0-9a-f]{40}$/.test(head.sha)) throw new GhError('bad_response');
+  const sha = head.sha as string;
+  const list = await json(run, 'repos/' + repo + '/commits/' + sha + '/check-runs?per_page=100', signal) as Row;
+  const runs = Array.isArray(list?.check_runs) ? list.check_runs : [];
+  const items = runs.flatMap(entry => {
+    const run = object(entry), name = text(run?.name, 200);
+    if (!run || !name) return [];
+    const target = typeof run.details_url === 'string' && /^https:\/\/github\.com\//.test(run.details_url) ? run.details_url : 'https://github.com/' + repo + '/pull/' + number + '/checks';
+    return [{ name, state: text(run.status, 30), conclusion: text(run.conclusion, 30), url: target }];
+  });
+  return { ref: sha, state: text(pull?.mergeable_state, 40), items };
+}
+
 function only(input: Row, allowed: string[]): void {
   if (Object.keys(input).some(key => !allowed.includes(key))) throw new GhError('bad_response');
 }
@@ -215,6 +287,24 @@ export function createGithubNode(options: { run?: GhRun } = {}) {
       only(input, ['repository', 'number', 'page']);
       if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
       return ghComments(run, uncancelled, input.repository, input.number, pageOf(input.page));
+    }),
+    'github.search': async params => reply(async () => {
+      const input = object(params) ?? {};
+      only(input, ['query', 'limit']);
+      if (typeof input.query !== 'string') throw new GhError('bad_response');
+      return ghSearch(run, uncancelled, { query: input.query, limit: input.limit === undefined ? 10 : Number(input.limit) });
+    }),
+    'github.diff': async params => reply(async () => {
+      const input = object(params) ?? {};
+      only(input, ['repository', 'number', 'path']);
+      if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
+      return ghDiff(run, uncancelled, input.repository, input.number, input.path === undefined ? undefined : String(input.path));
+    }),
+    'github.checks': async params => reply(async () => {
+      const input = object(params) ?? {};
+      only(input, ['repository', 'number']);
+      if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
+      return ghChecks(run, uncancelled, input.repository, input.number);
     }),
   };
   return handlers;

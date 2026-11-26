@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
-import { GhError, createGithubNode, ghAccount, ghComments, ghIssue, ghNotifications, repositoryOf, runGh, type GhRun } from '../plugins/github-node.ts';
+import { GhError, createGithubNode, ghAccount, ghChecks, ghComments, ghDiff, ghIssue, ghNotifications, ghSearch, repositoryOf, runGh, type GhRun } from '../plugins/github-node.ts';
 
 const account = { login: 'octocat', name: 'The Octocat', id: 1, type: 'User' };
 const page = (items: unknown[]) => JSON.stringify(items);
@@ -120,6 +120,72 @@ test('真实启动器按 gh 的输出归类失败原因，输出原文不回传'
   const refused = await outcome('gh: You are not currently logged in. ghp_abcdefghijklmnopqrstuvwxyz') as GhError;
   assert.equal(refused.kind, 'not_signed_in');
   assert.equal(refused.message, '这台电脑的 gh 尚未登录 GitHub。');
+});
+
+test('搜索：查询去掉控制字符，链接由仓库和编号拼出，非议题结果被丢弃', async () => {
+  const signal = new AbortController().signal;
+  const seen: string[][] = [];
+  const run: GhRun = async args => {
+    seen.push(args);
+    return JSON.stringify({ total_count: 2, items: [
+      { number: 7, title: '慢查询', state: 'open', updated_at: '2026-11-01T00:00:00Z', repository: { full_name: 'o/r' }, pull_request: { url: 'x' }, html_url: 'https://evil.example/' },
+      { title: '没有仓库和编号' },
+    ] });
+  };
+  const result = await ghSearch(run, signal, { query: '  慢\n查询\u0000 ', limit: 99 });
+  assert.deepEqual(result, { total: 2, items: [{ repository: 'o/r', number: 7, title: '慢查询', state: 'open', updatedAt: '2026-11-01T00:00:00Z',
+    url: 'https://github.com/o/r/pull/7', pull: true }] });
+  const query = new URL('https://api.github.com/' + seen[0]!.at(-1)!).searchParams;
+  assert.equal(query.get('q'), '慢 查询');
+  assert.equal(query.get('per_page'), '30', 'the limit is capped at 30');
+  // A query that starts with a dash would be read by gh as an option.
+  await assert.rejects(ghSearch(async () => '{}', signal, { query: '--help', limit: 5 }), isGhError('bad_response'));
+  await assert.rejects(ghSearch(async () => '[]', signal, { query: 'x', limit: 5 }), isGhError('bad_response'));
+});
+
+test('差异：整份返回并截断，指定文件时只取该文件的段落，找不到报错', async () => {
+  const signal = new AbortController().signal;
+  const diff = ['diff --git a/src/a.ts b/src/a.ts', '--- a/src/a.ts', '+++ b/src/a.ts', '+a', 'diff --git a/b.ts b/b.ts', '--- a/b.ts', '+++ b/b.ts', '+b'].join('\n');
+  const run: GhRun = async () => diff;
+  assert.equal((await ghDiff(run, signal, 'o/r', 3)).text, diff);
+  assert.equal((await ghDiff(run, signal, 'o/r', 3, 'b.ts')).text, 'diff --git a/b.ts b/b.ts\n--- a/b.ts\n+++ b/b.ts\n+b');
+  await assert.rejects(ghDiff(run, signal, 'o/r', 3, 'missing.ts'), isGhError('bad_response'));
+  await assert.rejects(ghDiff(run, signal, 'o/r', 3, '/etc/passwd'), isGhError('bad_response'));
+  await assert.rejects(ghDiff(run, signal, 'o/r', 3, '../secret'), isGhError('bad_response'));
+  const long = await ghDiff(async () => 'x'.repeat(70_000), signal, 'o/r', 3);
+  assert.equal(long.truncated, true);
+  assert.equal(Array.from(long.text).length, 60_000);
+});
+
+test('检查状态：按合并请求头提交读取，链接只接受 github.com，缺失时回到检查页', async () => {
+  const signal = new AbortController().signal;
+  const sha = 'a'.repeat(40);
+  const run: GhRun = async args => {
+    if (args.at(-1) === 'repos/o/r/pulls/5') return JSON.stringify({ head: { sha }, mergeable_state: 'dirty' });
+    if (args.at(-1) === 'repos/o/r/commits/' + sha + '/check-runs?per_page=100') return JSON.stringify({ check_runs: [
+      { name: 'build', status: 'completed', conclusion: 'failure', details_url: 'https://github.com/o/r/actions/runs/1' },
+      { name: 'test', status: 'in_progress', details_url: 'https://evil.example/' },
+      { status: 'completed' },
+    ] });
+    throw new Error('unexpected ' + args.join(' '));
+  };
+  assert.deepEqual(await ghChecks(run, signal, 'o/r', 5), { ref: sha, state: 'dirty', items: [
+    { name: 'build', state: 'completed', conclusion: 'failure', url: 'https://github.com/o/r/actions/runs/1' },
+    { name: 'test', state: 'in_progress', conclusion: '', url: 'https://github.com/o/r/pull/5/checks' },
+  ] });
+  await assert.rejects(ghChecks(async () => JSON.stringify({ head: { sha: 'not-a-sha' } }), signal, 'o/r', 5), isGhError('bad_response'));
+});
+
+test('搜索、差异和检查处理器拒绝未知参数与错误类型', async () => {
+  const node = createGithubNode({ run: async () => '{}' });
+  for (const [method, params] of [
+    ['github.search', { query: 'x', extra: 1 }], ['github.search', { limit: 5 }], ['github.search', { query: 'x', limit: 'many' }],
+    ['github.diff', { repository: 'o/r', number: 'five' }], ['github.diff', { repository: 'o/r', number: 5, path: 7 }],
+    ['github.checks', { repository: 'o/r' }], ['github.checks', { repository: '../x', number: 5 }],
+  ] as const) {
+    const result = await node[method]!(params as unknown as JsonObject, emit) as { ok: boolean };
+    assert.equal(result.ok, false, method + ' ' + JSON.stringify(params));
+  }
 });
 
 test('环境里的令牌不传给 gh，gh 只用主人登录的账号', async t => {
