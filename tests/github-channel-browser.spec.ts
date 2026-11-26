@@ -76,5 +76,19 @@ test('渠道页可启用 GitHub 连接、选择电脑并立即检查，未读通
   expect(approval.details).toBe('已看过，可以这样改。');
   expect(approval.status).toBe('pending');
   expect(server.app.store.list<{ kind: string }>('approvals').length).toBe(1);
+
+  // The owner chooses which notifications reach the inbox, and the choice is saved as given.
+  await page.goto(server.url + '/#channels?token=test-github');
+  const githubCard = page.locator('#channel-github');
+  await githubCard.getByText('哪些通知进收件箱').click();
+  await githubCard.getByLabel('CI 失败收哪些').selectOption('default-branch');
+  await githubCard.getByLabel('静音的仓库').fill('octo/loud\nocto/other');
+  await githubCard.getByLabel('忽略的分支').fill('train/*\nbot/*');
+  await githubCard.getByRole('button', { name: '保存' }).click();
+  await expect.poll(() => server.app.githubView().ciMode).toBe('default-branch');
+  expect(server.app.githubView().mutedRepositories).toEqual(['octo/loud', 'octo/other']);
+  expect(server.app.githubView().ignoredBranches).toEqual(['train/*', 'bot/*']);
+  await page.reload();
+  await expect(page.locator('#channel-github').getByLabel('静音的仓库')).toHaveValue('octo/loud\nocto/other');
   expect(pageErrors).toEqual([]);
 });

@@ -1,8 +1,10 @@
 // GitHub 渠道：用某台电脑上的 gh 登录读取未读通知，进入收件箱。令牌留在那台电脑上。
 import { h, replace } from '../lib/dom.js';
-import { Button, Card, Check, Select } from '../ui/kit.js';
+import { Button, Card, Check, Field, Select, TextArea } from '../ui/kit.js';
 
 const READY = '执行机已提供 GitHub 读取';
+const CI_MODES = [['mine', '默认分支，以及我自己的合并请求'], ['default-branch', '只有默认分支'], ['all', '所有分支'], ['off', '不收 CI 失败']];
+const lines = value => value.split('\n').map(item => item.trim()).filter(Boolean);
 
 export function createGithubChannel({ api, store }) {
   let view = null;
@@ -35,11 +37,15 @@ export function createGithubChannel({ api, store }) {
     const select = Select({ options: usable.map(machine => [machine.id, machine.name + (machine.online ? '' : '（离线）')]), value: view.machineId ?? '', 'aria-label': '读取 GitHub 的电脑' });
     if (!usable.length) select.append(new Option('没有可用的电脑', ''));
     const enabled = Check({ label: '读取 GitHub 未读通知', checked: view.enabled });
+    const ciMode = Select({ options: CI_MODES, value: view.ciMode ?? 'mine', 'aria-label': 'CI 失败收哪些' });
+    const muted = TextArea({ rows: 2, value: (view.mutedRepositories ?? []).join('\n'), 'aria-label': '静音的仓库', placeholder: '一行一个，owner/repo' });
+    const ignored = TextArea({ rows: 2, value: (view.ignoredBranches ?? []).join('\n'), 'aria-label': '忽略的分支', placeholder: '一行一个，可用 * 和 ?' });
     const save = Button({ label: '保存', kind: 'primary', size: 'sm', onClick: async () => {
       if (busy) return;
       busy = true; save.disabled = true;
       try {
-        view = await api.put('/github/connector', { enabled: enabled.querySelector('input').checked, machineId: select.value || undefined });
+        view = await api.put('/github/connector', { enabled: enabled.querySelector('input').checked, machineId: select.value || undefined,
+          ciMode: ciMode.value, mutedRepositories: lines(muted.value), ignoredBranches: lines(ignored.value) });
         error = '';
         store.refresh();
       } catch (cause) { error = cause.message; }
@@ -64,6 +70,11 @@ export function createGithubChannel({ api, store }) {
       h('div', { class: 'form-row' }, h('label', { class: 'field' }, h('span', { class: 'field__label' }, '读取 GitHub 的电脑'), select),
         h('div', { class: 'stack' }, enabled, h('div', { class: 'row row--wrap' }, save, check))),
       account,
+      h('details', null, h('summary', null, '哪些通知进收件箱'),
+        h('div', { class: 'stack' },
+          Field({ label: 'CI 失败', control: ciMode, hint: 'GitHub 只通知发起运行的人，之后的失败由工作台定期核对。' }),
+          Field({ label: '静音的仓库', control: muted, hint: '这些仓库的通知不进收件箱。' }),
+          Field({ label: '忽略的分支', control: ignored, hint: '这些分支的 CI 失败不进收件箱。* 不跨 /，? 匹配一个字符。' }))),
       last.length ? h('p', { class: 'small muted' }, ...last.flatMap((item, index) => index ? [' · ', item] : [item])) : null,
       !usable.length ? h('p', { class: 'small muted' }, '需要一台安装了 gh 并已登录 GitHub 的电脑，且 ${READY}。') : null);
     status.textContent = '';

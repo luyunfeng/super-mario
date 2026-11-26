@@ -392,6 +392,25 @@ export async function ghCiState(run: GhRun, signal: AbortSignal, repository: str
   return { over: '', failed };
 }
 
+/** What decides whether a branch's failed run is for the owner: the repository's default
+ *  branch, and whether the owner has an open pull request from this branch. */
+export async function ghCiContext(run: GhRun, signal: AbortSignal, repository: string, branch: string): Promise<{ defaultBranch: string; ownPullRequest?: number }> {
+  const repo = repositoryOf(repository);
+  const name = branchOf(branch);
+  const info = (await json(run, 'repos/' + repo, signal)) as Row;
+  if (typeof info?.default_branch !== 'string' || !info.default_branch) throw new GhError('bad_response');
+  const me = await ghAccount(run, signal);
+  const owner = repo.split('/')[0]!;
+  const pulls = (await json(run, 'repos/' + repo + '/pulls?state=open&head=' + encodeURIComponent(owner + ':' + name) + '&per_page=30', signal)) as Row[];
+  if (!Array.isArray(pulls)) throw new GhError('bad_response');
+  const mine = pulls.find(entry => {
+    const row = object(entry), user = object(row?.user);
+    return typeof row?.number === 'number' && typeof user?.login === 'string' && user.login.toLowerCase() === me.login.toLowerCase();
+  });
+  const number = mine ? integer(object(mine)?.number) : undefined;
+  return { defaultBranch: info.default_branch as string, ...(number ? { ownPullRequest: number } : {}) };
+}
+
 function only(input: Row, allowed: string[]): void {
   if (Object.keys(input).some(key => !allowed.includes(key))) throw new GhError('bad_response');
 }
@@ -461,6 +480,12 @@ export function createGithubNode(options: { run?: GhRun; dataDir?: string } = {}
       if (typeof input.repository !== 'string' || typeof input.branch !== 'string') throw new GhError('bad_response');
       if (input.pull !== undefined && typeof input.pull !== 'number') throw new GhError('bad_response');
       return ghCiState(run, uncancelled, input.repository, input.branch, input.pull);
+    }),
+    'github.ci-context': async params => reply(async () => {
+      const input = object(params) ?? {};
+      only(input, ['repository', 'branch']);
+      if (typeof input.repository !== 'string' || typeof input.branch !== 'string') throw new GhError('bad_response');
+      return ghCiContext(run, uncancelled, input.repository, input.branch);
     }),
     ...(comments ? {
       'github.comment': async (params: JsonObject) => reply(async () => {

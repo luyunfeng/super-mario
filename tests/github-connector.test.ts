@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { InboxThing, Json } from '../packages/plugin-sdk/src/index.ts';
-import { createGithubConnector, githubThing, type GithubConnectorActions, type GithubConnectorState, type GithubMachine, type GithubNotification } from '../plugins/github-connector.ts';
+import { branchMatches, createGithubConnector, githubAdmitted, githubThing, type GithubConnectorActions, type GithubConnectorState, type GithubMachine, type GithubNotification } from '../plugins/github-connector.ts';
 
 const notification = (overrides: Partial<GithubNotification> = {}): GithubNotification => ({
   id: '100', reason: 'review_requested', repository: 'octo/widgets', updatedAt: '2026-11-20T08:00:00Z',
@@ -20,6 +20,7 @@ function fixture(initial: GithubConnectorState) {
   let items: GithubNotification[] = [notification()];
   let ciState: unknown = { over: '', failed: null };
   let ciReason: string | undefined;
+  let ciContext: unknown = { defaultBranch: 'master', ownPullRequest: 7 };
   const machines: GithubMachine[] = [{ id: 'm1', name: '开发机', online: true, capabilities: ['github.account', 'github.notifications'] }];
   const actions: GithubConnectorActions = {
     async githubCall(machineId, method) {
@@ -27,6 +28,7 @@ function fixture(initial: GithubConnectorState) {
       if (method === 'github.account') return (failAccount ? { ok: false, reason: 'not_signed_in', message: failAccount } : { ok: true, data: { login } }) as Json;
       if (method === 'github.notifications') return (failNotifications ? { ok: false, reason: 'rate_limited', message: failNotifications } : { ok: true, data: { items, hasNext: false } }) as Json;
       if (method === 'github.ci-state') return (ciReason ? { ok: false, reason: ciReason, message: 'x' } : { ok: true, data: ciState }) as Json;
+      if (method === 'github.ci-context') return { ok: true, data: ciContext } as Json;
       throw new Error('unexpected method ' + method);
     },
     githubMachines: () => machines,
@@ -38,6 +40,7 @@ function fixture(initial: GithubConnectorState) {
   };
   return { actions, ingested, retired, calls, setLogin: (value: string) => { login = value; }, setItems: (value: GithubNotification[]) => { items = value; },
     closed, setCiState: (value: unknown) => { ciState = value; }, failCi: (reason?: string) => { ciReason = reason; },
+    setCiContext: (value: unknown) => { ciContext = value; },
     failAccount: (message?: string) => { failAccount = message; }, failNotifications: (message?: string) => { failNotifications = message; }, state: () => state };
 }
 
@@ -214,4 +217,62 @@ test('CI 跟进：刚检查过的分支在间隔内不再检查，一次最多�
   many.setCiState({ over: '', failed: null });
   await poll(many.actions);
   assert.equal(many.calls.filter(call => call.method === 'github.ci-state').length, 5);
+});
+
+test('收件选项：静音的仓库、忽略的分支和四种 CI 模式决定什么进收件箱', () => {
+  const run = ciNotification('700', '2026-11-20T08:00:00Z', 'Build failed for main branch');
+  const train = ciNotification('701', '2026-11-20T08:00:00Z', 'Build failed for train/1732000000 branch');
+  const isDefault = { defaultBranch: 'main' };
+  const notDefault = { defaultBranch: 'master' };
+  const mine = { defaultBranch: 'master', ownPullRequest: 9 };
+  // A muted repository is left out entirely, whatever the notification is.
+  assert.equal(githubAdmitted(notification({ repository: 'octo/widgets' }), { mutedRepositories: ['OCTO/widgets'] }), false);
+  assert.equal(githubAdmitted(notification({ repository: 'octo/widgets' }), { mutedRepositories: ['octo/other'] }), true);
+  // Branches automation pushes are left out by default, and the owner can name others.
+  assert.equal(githubAdmitted(train, {}, isDefault), false);
+  const own = { defaultBranch: 'main', ownPullRequest: 3 };
+  assert.equal(githubAdmitted(train, { ignoredBranches: [] }, own), true, 'with no ignored branches, the owner own pull request comes in');
+  assert.equal(githubAdmitted(train, { ciMode: 'all' }, isDefault), false, 'an ignored branch stays out even in the all mode');
+  assert.equal(githubAdmitted(run, { ignoredBranches: ['ma?n'] }, isDefault), false);
+  assert.equal(githubAdmitted(run, { ignoredBranches: ['release/*'] }, isDefault), true);
+  // The default mode "mine": the default branch, or the owner's own open pull request.
+  assert.equal(githubAdmitted(run, {}, isDefault), true);
+  assert.equal(githubAdmitted(run, {}, mine), true);
+  assert.equal(githubAdmitted(run, {}, notDefault), false);
+  assert.equal(githubAdmitted(run, { ciMode: 'default-branch' }, isDefault), true);
+  assert.equal(githubAdmitted(run, { ciMode: 'default-branch' }, mine), false, 'an own pull request does not count in this mode');
+  assert.equal(githubAdmitted(run, { ciMode: 'all' }, notDefault), true);
+  assert.equal(githubAdmitted(run, { ciMode: 'off' }, isDefault), false);
+  // Other notifications are not subject to the CI modes.
+  assert.equal(githubAdmitted(notification(), { ciMode: 'off' }), true);
+  // * does not cross a slash, and other characters are matched as written.
+  assert.equal(branchMatches('train/*', 'train/1732000000'), true);
+  assert.equal(branchMatches('train/*', 'train/a/b'), false);
+  assert.equal(branchMatches('release-?', 'release-1'), true);
+  assert.equal(branchMatches('a.b', 'axb'), false);
+  assert.equal(branchMatches('a.b', 'a.b'), true);
+  assert.equal(branchMatches('(', 'x'), false);
+});
+
+test('收件选项在投递前生效：不进收件箱的失败也不登记跟进；仓库的默认分支一天只问一次', async () => {
+  const muted = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0, mutedRepositories: ['octo/widgets'] });
+  muted.setItems([ciNotification('710', '2026-11-20T08:00:00Z')]);
+  await poll(muted.actions);
+  assert.equal(muted.ingested.length, 0);
+  assert.deepEqual(muted.state().ci, {}, 'a muted repository failure is not followed');
+  const asked = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0 });
+  asked.setItems([ciNotification('711', '2026-11-20T08:00:00Z')]);
+  await poll(asked.actions);
+  await poll(asked.actions);
+  assert.equal(asked.calls.filter(call => call.method === 'github.ci-context').length, 1, 'the default branch is remembered for a day');
+  assert.equal(asked.ingested.length, 2);
+  // A failed read of the context is tried again next time instead of deciding blindly.
+  const broken = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0 });
+  broken.setItems([ciNotification('712', '2026-11-20T08:00:00Z')]);
+  const original = broken.actions.githubCall;
+  broken.actions.githubCall = async (machineId, method, params) => method === 'github.ci-context'
+ ? { ok: false, reason: 'rate_limited', message: '限流' } as Json : original(machineId, method, params);
+  await poll(broken.actions);
+  assert.equal(broken.ingested.length, 0);
+  assert.deepEqual(broken.state().repositories, {}, 'nothing is remembered from a failed read');
 });

@@ -116,6 +116,8 @@ test('GitHub CI 跟进：失败通知进入收件箱，分支恢复后归档并�
       if (path === 'user') return JSON.stringify({ login: 'octocat', name: '' });
       if (path.startsWith('notifications?')) return JSON.stringify(recovered ? [] : [{ id: '900', reason: 'ci_activity', updated_at: '2026-11-20T08:00:00Z',
         subject: { title: 'Build and test failed for main branch', type: 'CheckSuite' }, repository: { full_name: 'octo/widgets' } }]);
+      if (path === 'repos/octo/widgets') return JSON.stringify({ default_branch: 'main' });
+      if (path.startsWith('repos/octo/widgets/pulls?')) return '[]';
       if (path.startsWith('repos/octo/widgets/actions/runs?')) return JSON.stringify({ workflow_runs: recovered
         ? [{ name: 'Build and test', status: 'completed', conclusion: 'success', updated_at: '2026-11-21T00:00:00Z' }]
         : [{ name: 'Build and test', status: 'completed', conclusion: 'failure', updated_at: '2026-11-20T08:00:00Z' }] });
@@ -141,4 +143,40 @@ test('GitHub CI 跟进：失败通知进入收件箱，分支恢复后归档并�
   assert.ok(closed.archivedAt, 'the item is closed');
   assert.equal(closed.reason, 'GitHub：后来成功了');
   assert.equal(server.app.store.get<{ ci: Record<string, unknown> }>('github.connector', 'state')!.ci['ci:octo/widgets@main'], undefined, 'the branch is no longer followed');
+});
+
+test('GitHub 收件选项：合法的保存，非法的被拒且不改动已保存的值', { timeout: 60_000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-github-options-'));
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: join(dir, 'data'), demo: true, token: 'offline-github-options' });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const call = async (body: unknown) => {
+    const response = await fetch(server.url + '/api/v1/github/connector', { method: 'PUT',
+      headers: { 'Authorization': 'Bearer offline-github-options', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return { status: response.status, data: await response.json() };
+  };
+  // Without a machine the connector stays off, but the inbox choices can still be saved.
+  const saved = await call({ ciMode: 'all', mutedRepositories: [' octo/loud ', 'octo/other', 'octo/loud'], ignoredBranches: ['train/*', 'bot/?'] });
+  assert.equal(saved.status, 200, JSON.stringify(saved.data));
+  assert.equal(saved.data.ciMode, 'all');
+  assert.deepEqual(saved.data.mutedRepositories, ['octo/loud', 'octo/other'], 'entries are trimmed and duplicates removed');
+  assert.deepEqual(saved.data.ignoredBranches, ['train/*', 'bot/?']);
+  // A bad entry is refused as a whole.
+  for (const body of [
+    { ciMode: 'everything' }, { ciMode: 1 },
+    { mutedRepositories: ['octo'] }, { mutedRepositories: ['https://x.example'] }, { mutedRepositories: 'octo/widgets' }, { mutedRepositories: [7] },
+    { ignoredBranches: [''] }, { ignoredBranches: ['a'.repeat(251)] }, { ignoredBranches: ['a\u0000b'] },
+    { mutedRepositories: Array.from({ length: 101 }, (_, index) => 'octo/r' + index) },
+    { extra: true },
+  ]) {
+    assert.equal((await call(body)).status, 400, JSON.stringify(body));
+  }
+  const view = await (await fetch(server.url + '/api/v1/github/connector', { headers: { 'Authorization': 'Bearer offline-github-options' } })).json();
+  assert.equal(view.ciMode, 'all');
+  assert.deepEqual(view.mutedRepositories, ['octo/loud', 'octo/other']);
+  assert.deepEqual(view.ignoredBranches, ['train/*', 'bot/?']);
+  // An empty list is a choice too: nothing is muted, and no branch is ignored.
+  const cleared = await call({ mutedRepositories: [], ignoredBranches: [] });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual(cleared.data.mutedRepositories, []);
+  assert.deepEqual(cleared.data.ignoredBranches, []);
 });

@@ -9,6 +9,15 @@ export interface GithubMachine { id: string; name: string; online: boolean; capa
 export interface GithubConnectorState {
   machineId?: string;
   enabled?: boolean;
+  /** Which CI failures reach the inbox. */
+  ciMode?: 'default-branch' | 'mine' | 'all' | 'off';
+  /** Repositories whose notifications are left out. */
+  mutedRepositories?: string[];
+  /** Branch patterns, as path.Match writes them, whose CI never comes in. */
+  ignoredBranches?: string[];
+  /** What was last read about a repository and a branch, remembered for a day so it is not
+   *  asked for on every run. The key is the repository and the branch. */
+  repositories?: Record<string, { defaultBranch: string; ownPullRequest?: number; at: string }>;
   /** The account GitHub last named for the machine's login. */
   login?: string;
   /** Counts the changes of login. A read that began under an earlier epoch is discarded. */
@@ -18,6 +27,40 @@ export interface GithubConnectorState {
   lastRunAt?: string;
   lastError?: string;
 }
+
+/** Branches automation pushes all day, such as a training loop's train/<timestamp>. */
+export const DEFAULT_IGNORED_BRANCHES = ['train/*'];
+
+export type CiDetail = { defaultBranch?: string; ownPullRequest?: number };
+
+/** Whether a notification reaches the inbox under the owner's choices. */
+export function githubAdmitted(notification: GithubNotification, state: Pick<GithubConnectorState, 'ciMode' | 'mutedRepositories' | 'ignoredBranches'>, detail: CiDetail = {}): boolean {
+  if ((state.mutedRepositories ?? []).some(name => name.trim().toLowerCase() === notification.repository.toLowerCase())) return false;
+  if (notification.reason !== 'ci_activity') return true;
+  const mode = state.ciMode ?? 'mine';
+  if (mode === 'off') return false;
+  const branch = ciTitle.exec(notification.subject.title.trim())?.[2];
+  if (branch && (state.ignoredBranches ?? DEFAULT_IGNORED_BRANCHES).some(pattern => branchMatches(pattern, branch))) return false;
+  if (mode === 'all') return true;
+  const defaultBranch = detail.defaultBranch !== undefined && branch === detail.defaultBranch;
+  if (mode === 'default-branch') return defaultBranch;
+  // "mine": the default branch's failures, and those of the owner's own open pull requests.
+  return defaultBranch || detail.ownPullRequest !== undefined;
+}
+
+/** Whether a pattern matches a branch name. * does not cross a /, as in path.Match. */
+export function branchMatches(pattern: string, branch: string): boolean {
+  const special = new Set(['*', '?']);
+  let expression = '^';
+  for (const char of pattern) {
+    if (char === '*') expression += '[^/]*';
+    else if (char === '?') expression += '[^/]';
+    else expression += special.has(char) || /[a-z0-9]/i.test(char) ? char : String.fromCharCode(92) + char;
+  }
+  try { return new RegExp(expression + '$', 'i').test(branch); }
+  catch { return false; }
+}
+
 
 export interface GithubConnectorActions {
   githubCall(machineId: string, method: string, params: JsonObject): Promise<Json>;
@@ -124,7 +167,35 @@ async function run(actions: GithubConnectorActions): Promise<void> {
     // to an account that is no longer being read, and are not written.
     const after = actions.githubState();
     if (!after.enabled || after.machineId !== machineId || after.epoch !== epoch || !sameLogin(after.login, login)) return;
-    const things = reply.data.items.flatMap(item => { const thing = githubThing(item); return thing ? [thing] : []; });
+    // What reaches the inbox is the owner's choice. A failed run needs to know the branch's
+    // place in the repository first, which is read once a day per repository.
+    const repositories = { ...(after.repositories ?? {}) };
+    const things = [];
+    for (const item of reply.data.items) {
+      let detail: CiDetail = {};
+      if (item.reason === 'ci_activity') {
+        const branch = ciTitle.exec(item.subject.title.trim())?.[2];
+        if (branch) {
+          const contextKey = item.repository.toLowerCase() + '@' + branch;
+          const known = repositories[contextKey];
+          if (!known || Date.now() - Date.parse(known.at) >= 24 * 60 * 60 * 1000) {
+            const context = await actions.githubCall(machineId, 'github.ci-context', { repository: item.repository, branch: branch! }) as unknown as Reply<CiDetail>;
+            // A failed read leaves the choice to the next run, and does not drop the notification for good.
+            if (!context.ok) continue;
+            if (!context.data.defaultBranch) continue;
+            const defaultBranch = context.data.defaultBranch;
+            repositories[contextKey] = { defaultBranch, ...(context.data.ownPullRequest ? { ownPullRequest: context.data.ownPullRequest } : {}), at: new Date().toISOString() };
+            detail = context.data;
+          } else {
+            detail = { defaultBranch: known.defaultBranch, ...(known.ownPullRequest ? { ownPullRequest: known.ownPullRequest } : {}) };
+          }
+        }
+      }
+      if (!githubAdmitted(item, after, detail)) continue;
+      const thing = githubThing(item);
+      if (thing) things.push(thing);
+    }
+    actions.githubSave({ ...actions.githubState(), repositories });
     if (things.length) await actions.githubIngest(things);
     // A failed run is followed from now on. Its thread is the branch, so a rerun joins it.
     const ci = { ...(actions.githubState().ci ?? {}) };

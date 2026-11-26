@@ -43,7 +43,7 @@ import { actionTodoLink } from './todo-link.ts';
 import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
 import { createProjectLessonLearner } from './project-lesson-learner.ts';
-import { createGithubConnector, type GithubConnectorState } from '../../../plugins/github-connector.ts';
+import { createGithubConnector, DEFAULT_IGNORED_BRANCHES, type GithubConnectorState } from '../../../plugins/github-connector.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -606,11 +606,12 @@ export async function createWorkbench(config: AppConfig) {
   });
   plugins.register(githubConnector);
   function githubView() {
-    const { machineId, enabled, login, epoch, lastRunAt, lastError } = githubState();
+    const { machineId, enabled, login, epoch, lastRunAt, lastError, ciMode, mutedRepositories, ignoredBranches } = githubState();
     const machinesNow = machines?.list() ?? [];
     const machine = machinesNow.find(item => item.id === machineId);
     return {
       enabled: enabled === true, machineId, login, epoch, lastRunAt, lastError,
+      ciMode: ciMode ?? 'mine', mutedRepositories: mutedRepositories ?? [], ignoredBranches: ignoredBranches ?? DEFAULT_IGNORED_BRANCHES,
       accountKnown: login !== undefined,
       machine: machine ? { id: machine.id, name: machine.name, online: machine.online } : machineId ? { id: machineId, name: machineId, online: false } : null,
       ready: machine?.online === true && machine.capabilities.includes('github.account') && machine.capabilities.includes('github.notifications'),
@@ -656,8 +657,23 @@ export async function createWorkbench(config: AppConfig) {
   /** The owner's choices for the connector. A missing or unusable machine is refused, so the
    *  connector is never left enabled with nothing to read through. */
   function githubConfigure(input: Record<string, unknown>) {
-    if (Object.keys(input).some(key => !['enabled', 'machineId'].includes(key))) throw new InputError('GitHub 连接参数无效');
+    if (Object.keys(input).some(key => !['enabled', 'machineId', 'ciMode', 'mutedRepositories', 'ignoredBranches'].includes(key))) throw new InputError('GitHub 连接参数无效');
     const state = githubState();
+    // The inbox choices. Each is validated whole, so a bad entry leaves the saved ones as they are.
+    const ciMode = input.ciMode === undefined ? state.ciMode : input.ciMode;
+    if (ciMode !== undefined && !['default-branch', 'mine', 'all', 'off'].includes(String(ciMode))) throw new InputError('CI 收件模式无效');
+    const names = (value: unknown, label: string, pattern: RegExp): string[] | undefined => {
+      if (value === undefined) return undefined;
+      if (!Array.isArray(value) || value.length > 100) throw new InputError(label + '须为不超过 100 项的列表');
+      const cleaned = [...new Set(value.map(item => {
+        if (typeof item !== 'string') throw new InputError(label + '的每一项须为文本');
+        return item.trim();
+      }))];
+      if (cleaned.some(item => !item || item.length > 250 || !pattern.test(item))) throw new InputError(label + '中有无效的项');
+      return cleaned;
+    };
+    const muted = names(input.mutedRepositories, '静音的仓库', /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/);
+    const ignored = names(input.ignoredBranches, '忽略的分支', /^[^\u0000-\u001f\u007f]+$/);
     if (input.machineId !== undefined && (typeof input.machineId !== 'string' || !input.machineId)) throw new InputError('电脑标识无效');
     const machineId = input.machineId === undefined ? state.machineId : input.machineId as string;
     const enabled = input.enabled === undefined ? state.enabled === true : input.enabled;
@@ -673,7 +689,12 @@ export async function createWorkbench(config: AppConfig) {
       // GitHub names for it, instead of keeping the account the earlier machine was signed in as.
       if (machineId !== state.machineId) account = {};
     }
-    const next: GithubConnectorState = { machineId, enabled, ...account, ...(state.lastRunAt ? { lastRunAt: state.lastRunAt } : {}) };
+    const next: GithubConnectorState = { machineId, enabled, ...account,
+      ...(ciMode !== undefined ? { ciMode: ciMode as GithubConnectorState['ciMode'] } : {}),
+      ...(muted !== undefined ? { mutedRepositories: muted } : state.mutedRepositories ? { mutedRepositories: state.mutedRepositories } : {}),
+      ...(ignored !== undefined ? { ignoredBranches: ignored } : state.ignoredBranches ? { ignoredBranches: state.ignoredBranches } : {}),
+      ...(state.repositories ? { repositories: state.repositories } : {}), ...(state.ci ? { ci: state.ci } : {}),
+      ...(state.lastRunAt ? { lastRunAt: state.lastRunAt } : {}) };
     store.put(githubStateKey, 'state', next);
     return githubView();
   }
