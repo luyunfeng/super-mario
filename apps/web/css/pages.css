@@ -38,6 +38,11 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
 /* The editor under a file: a box and what was done with it. */
 .code-sidebar__edit textarea { font-family: var(--mono, monospace); font-size: calc(12px * var(--reading-scale, 1)); }
 .code-sidebar__git { border-top: 1px solid var(--line); padding-top: 8px; }
+/* A line of the diff that can be commented on, with its number, and the comment under it. */
+.diff-line--target { cursor: pointer; }
+.diff-line--target:hover, .diff-line--active { outline: 1px solid var(--brand-line); outline-offset: -1px; background: var(--brand-soft); }
+.diff-line__no { color: var(--text-3); user-select: none; }
+.code-sidebar__comment { margin: 4px 0 8px 12px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
 .diff-line { display: inline-block; min-width: 100%; padding: 0 4px; border-radius: 2px; }
 .diff-line--add { background: #e6f7ed; color: #065f46; }
 .diff-line--del { background: #fdecec; color: #991b1b; }

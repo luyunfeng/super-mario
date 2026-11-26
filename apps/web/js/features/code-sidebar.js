@@ -14,6 +14,21 @@ function diffLineClass(line) {
   return 'diff-line';
 }
 
+/** The line of the file a diff line is about, as the diff's own headers count them. */
+export function diffLineNumbers(text) {
+  const numbers = [];
+  let line = 0;
+  for (const row of text.split('\n')) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
+    if (hunk) { line = Number(hunk[1]); numbers.push(undefined); continue; }
+    if (row.startsWith('+++') || row.startsWith('---') || row.startsWith('diff ') || row.startsWith('index ')) { numbers.push(undefined); continue; }
+    if (row.startsWith('-')) { numbers.push(undefined); continue; }
+    if (row.startsWith('+') || row.startsWith(' ')) { numbers.push(line++); continue; }
+    numbers.push(undefined);
+  }
+  return numbers;
+}
+
 export function renderDiffLines(text) {
   const lines = text.split('\n');
   const nodes = [];
@@ -26,7 +41,7 @@ export function renderDiffLines(text) {
 }
 
 /** Both conversations browse the saved computer binding through the same read-only API. */
-export function createCodeSidebar({ api, store }) {
+export function createCodeSidebar({ api, store, compose }) {
   let projectId = '', selected = '', sequence = 0, binding = '', opened = false, mode = 'file';
   const body = h('div', { class: 'code-sidebar__body' });
   const crumbs = h('div', { class: 'code-sidebar__crumbs small muted' });
@@ -146,7 +161,7 @@ export function createCodeSidebar({ api, store }) {
         replace(tree, parentBtn, entries);
       } else {
         status.textContent = `${path}${value.note ? ' · ' + value.note : ''}`;
-        if (kind === 'diff' && value.text) replace(output, renderDiffLines(value.text));
+        if (kind === 'diff' && value.text) replace(output, renderReviewDiff(value.text, path));
         else output.textContent = value.text || (kind === 'diff' ? '没有已跟踪文件差异。' : '');
         // A file as read can be edited: what was read is kept, with its hash, so that saving is
         // refused if the file changed on the computer in the meantime.
@@ -209,6 +224,47 @@ export function createCodeSidebar({ api, store }) {
       feedback.textContent = error?.status === 409 ? `没有撤销：${error.message}` : '撤销失败或结果未知，请重新读取文件核对。';
       undo.disabled = false;
     }
+  }
+  /** The diff as lines that can be pointed at: clicking one opens a comment on it, and the
+   *  comment goes to the conversation as a quotation of that line, where the assistant reads it. */
+  function renderReviewDiff(text, path) {
+    const lines = text.split('\n'), numbers = diffLineNumbers(text), nodes = [];
+    const comment = h('div', { class: 'stack code-sidebar__comment', role: 'group', 'aria-label': '对这一行评论', hidden: true });
+    let chosen = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (i === lines.length - 1 && lines[i] === '') break;
+      const number = numbers[i];
+      // Only a line of the file as it is now can be commented on: a removed line is not there to point at.
+      const target = number === undefined ? null : i;
+      const row = h('span', { class: diffLineClass(lines[i]) + (target === null ? '' : ' diff-line--target'),
+        ...(target === null ? {} : { role: 'button', tabindex: 0, 'aria-label': '评论第 ' + number + ' 行' }), dataset: target === null ? {} : { line: String(target) } },
+        number === undefined ? lines[i] : h('span', { class: 'diff-line__no' }, String(number).padStart(4, ' ') + ' '), lines[i].slice(1));
+      nodes.push(row);
+      if (i < lines.length - 1) nodes.push('\n');
+      if (target === null) continue;
+      const open = () => {
+        chosen = target;
+        for (const other of output.querySelectorAll('.diff-line--active')) other.classList.remove('diff-line--active');
+        row.classList.add('diff-line--active');
+        const box = TextArea({ 'aria-label': '评论', rows: 3, placeholder: '对这一行有什么要改的' });
+        const add = Button({ label: '加入对话', size: 'sm', kind: 'primary', onClick: () => {
+          const words = box.value.trim();
+          if (!words) { box.focus(); return; }
+          // The quotation names the file and the line, and carries the line as it is, so that the
+          // assistant reads the right place without being told where to look.
+          compose?.('> ' + path + ':' + number + ' ' + (lines[chosen] ?? '').slice(1) + '\n\n' + words + '\n\n');
+          comment.hidden = true; row.classList.remove('diff-line--active');
+        } });
+        replace(comment, h('strong', { class: 'small' }, path + ' 第 ' + number + ' 行'), box, h('div', { class: 'row' }, add,
+          Button({ label: '取消', size: 'sm', onClick: () => { comment.hidden = true; row.classList.remove('diff-line--active'); } })));
+        comment.hidden = false;
+        row.after(comment);
+        box.focus();
+      };
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+    }
+    return nodes;
   }
   async function readGit() {
     if (!project()?.workspace) return;

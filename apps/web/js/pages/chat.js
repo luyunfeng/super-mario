@@ -53,7 +53,11 @@ export function createChatPage({ api, store, scope, router }) {
   const sharing = createConversationSharing({api,store,getRows:()=>store.view.snapshot?.messages});
   const transcript = createConversationExport({ api, store });
   const attention = createAttention({ api, store });
-  const code = createCodeSidebar({ api, store });
+  const code = createCodeSidebar({ api, store, compose: value => {
+    // Put the comment where the cursor is, as a dragged file is put, and bring the box into view.
+    const start = input.selectionStart, end = input.selectionEnd;
+    input.setRangeText(value, start, end, 'end'); input.focus();
+  } });
   const recent = createRecentWork({ api, store, router, scope });
   const banner = h('div', { id: 'chat-banner' });
   const decisionText = h('span');

@@ -27,7 +27,11 @@ import { createConversationSharing } from './conversation-sharing.js';
 import { createConversationExport } from './conversation-export.js';
 
 export function createProjectConversation({ api, store, router, scope, bindFolder }) {
-  const code = createCodeSidebar({ api, store });
+  const code = createCodeSidebar({ api, store, compose: value => {
+    // Put the comment where the cursor is, as a dragged file is put, and bring the box into view.
+    const start = text.selectionStart, end = text.selectionEnd;
+    text.setRangeText(value, start, end, 'end'); text.focus();
+  } });
   let projectId = '', todoId = '', requestedFile = '';
   const statusButton = conversationStatusButton({ api, store, scope, target: 'project', project: () => projectId, todo: () => todoId });
   const translation = createReplyTranslation({ api, store, getScope: () => projectId, getConversationId: () => `project:${projectId}:work` });
