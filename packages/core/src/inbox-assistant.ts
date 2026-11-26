@@ -614,7 +614,10 @@ export function createInboxAssistant(options: {
   }
   const timer = setInterval(() => {
     void tick(true).catch(() =>
-      events.publish("agent.error", {
+      // After close() the store may already be shut. Reporting the failure would then
+      // throw inside the timer, after close() has stopped waiting, and surface as an
+      // unhandled error. A failing round during shutdown is the shutdown itself.
+      closed ? undefined : events.publish("agent.error", {
         conversationId: "inbox-assistant",
         error: "后台收件状态写入失败，请检查数据目录",
       }),
