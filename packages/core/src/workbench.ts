@@ -43,6 +43,7 @@ import { actionTodoLink } from './todo-link.ts';
 import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
 import { createProjectLessonLearner } from './project-lesson-learner.ts';
+import { createGithubConnector, type GithubConnectorState } from '../../../plugins/github-connector.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -568,6 +569,107 @@ export async function createWorkbench(config: AppConfig) {
     ingest:(source,items,policy)=>inbox.ingest(source,items,policy),knowledge,changed:(type,id)=>changed(type,{id})});
   plugins.register(subscriptions.extension);
   plugins.register(createReleaseSourceExtension());
+  // The GitHub connector reads through a machine's gh login. Only typed data crosses back,
+  // and its state keeps the account GitHub named, never a token.
+  const githubStateKey = 'github.connector';
+  const githubState = (): GithubConnectorState => store.get<GithubConnectorState>(githubStateKey, 'state') ?? {};
+  // The machine client is attached after the workbench is built. A poll runs later, but a
+  // missing client is still reported rather than dereferenced.
+  function githubMachines(): MachineClient {
+    if (!machines) throw new Error('执行机客户端尚未就绪');
+    return machines;
+  }
+  const githubConnector = createGithubConnector({
+    githubCall: (machineId, method, params) => githubMachines().call(machineId, method, params, { timeoutMs: 30_000 }),
+    githubMachines: () => githubMachines().list().map(({ id, name, online, capabilities }) => ({ id, name, online, capabilities })),
+    githubIngest: async things => { await inbox.ingest('github:' + (githubState().login ?? '').toLowerCase(), things); },
+    githubState,
+    githubSave: state => store.put(githubStateKey, 'state', state),
+    githubRetire: login => {
+      // The earlier account's open items are closed. What the owner already decided stays as it is.
+      const source = 'github:' + login.toLowerCase();
+      let retired = 0;
+      for (const item of inbox.list()) {
+        if (item.source !== source || item.archivedAt) continue;
+        inbox.archive(item.id, item.version);
+        retired++;
+      }
+      return retired;
+    },
+  });
+  plugins.register(githubConnector);
+  function githubView() {
+    const { machineId, enabled, login, epoch, lastRunAt, lastError } = githubState();
+    const machinesNow = machines?.list() ?? [];
+    const machine = machinesNow.find(item => item.id === machineId);
+    return {
+      enabled: enabled === true, machineId, login, epoch, lastRunAt, lastError,
+      accountKnown: login !== undefined,
+      machine: machine ? { id: machine.id, name: machine.name, online: machine.online } : machineId ? { id: machineId, name: machineId, online: false } : null,
+      ready: machine?.online === true && machine.capabilities.includes('github.account') && machine.capabilities.includes('github.notifications'),
+      machines: machinesNow.map(({ id, name, online, capabilities }) => ({
+        id, name, online, ready: online && capabilities.includes('github.account') && capabilities.includes('github.notifications') })),
+    };
+  }
+  /** The pull request or issue an inbox item points at, with its comments. Read through the
+   *  machine of the connector, so the token still stays on that machine. */
+  async function githubRead(id: string, page = 1) {
+    const item = inbox.list().find(entry => entry.id === id);
+    const target = item?.origin?.github;
+    if (!item || !target) throw new InputError('这条收件不是 GitHub 议题或合并请求', 404);
+    const state = githubState();
+    if (!state.machineId) throw new InputError('GitHub 连接尚未选择电脑', 409);
+    const machine = machines?.list().find(entry => entry.id === state.machineId);
+    if (!machine?.online) throw new InputError('读取 GitHub 的电脑不在线', 409);
+    // The item belongs to the account that was being read when it arrived. After a change of
+    // account it is still the owner's record, but it is not read through the new account.
+    const source = item.source;
+    if (state.login && source !== 'github:' + state.login.toLowerCase()) throw new InputError('这条收件属于此前的 GitHub 账号，不再读取正文', 409);
+    if (!Number.isSafeInteger(page) || page < 1 || page > 1000) throw new InputError('页码无效');
+    const params = { repository: target.repository, number: target.number };
+    const [issue, comments] = await Promise.all([
+      githubMachines().call(machine.id, 'github.issue', params, { timeoutMs: 30_000 }),
+      githubMachines().call(machine.id, 'github.comments', { ...params, page }, { timeoutMs: 30_000 }),
+    ]) as [{ ok: boolean; data?: unknown; message?: string }, { ok: boolean; data?: { items: unknown[]; hasNext: boolean }; message?: string }];
+    if (!issue.ok || !comments.ok) throw new InputError(issue.message ?? comments.message ?? '读取 GitHub 失败', 502);
+    // Only what the page shows. A field the machine adds later does not reach the page unexamined.
+    const detail = issue.data as { title?: string; body?: string; state?: string; url?: string; author?: string; comments?: number };
+    const shown = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+    return {
+      title: typeof detail.title === 'string' ? detail.title : '', body: typeof detail.body === 'string' ? detail.body : '',
+      state: typeof detail.state === 'string' ? detail.state : '', url: typeof detail.url === 'string' ? detail.url : '',
+      author: typeof detail.author === 'string' ? detail.author : '', comments: typeof detail.comments === 'number' ? detail.comments : 0,
+      commentsPage: comments.data!.items.filter(shown).map(comment => ({
+        author: typeof comment.author === 'string' ? comment.author : '', body: typeof comment.body === 'string' ? comment.body : '',
+        createdAt: typeof comment.createdAt === 'string' ? comment.createdAt : '', url: typeof comment.url === 'string' ? comment.url : '',
+      })),
+      commentsHasNext: comments.data!.hasNext === true, page,
+    };
+  }
+  /** The owner's choices for the connector. A missing or unusable machine is refused, so the
+   *  connector is never left enabled with nothing to read through. */
+  function githubConfigure(input: Record<string, unknown>) {
+    if (Object.keys(input).some(key => !['enabled', 'machineId'].includes(key))) throw new InputError('GitHub 连接参数无效');
+    const state = githubState();
+    if (input.machineId !== undefined && (typeof input.machineId !== 'string' || !input.machineId)) throw new InputError('电脑标识无效');
+    const machineId = input.machineId === undefined ? state.machineId : input.machineId as string;
+    const enabled = input.enabled === undefined ? state.enabled === true : input.enabled;
+    if (typeof enabled !== 'boolean') throw new InputError('启用状态须为布尔值');
+    let account: Pick<GithubConnectorState, 'login' | 'epoch'> = { login: state.login, epoch: state.epoch };
+    if (enabled) {
+      if (typeof machineId !== 'string' || !machineId) throw new InputError('请选择一台已连接的电脑');
+      const machine = machines?.list().find(item => item.id === machineId);
+      if (!machine?.online) throw new InputError('所选电脑不在线', 409);
+      if (!machine.capabilities.includes('github.account') || !machine.capabilities.includes('github.notifications'))
+        throw new InputError('所选电脑的执行机版本不支持 GitHub 连接，请升级执行机', 409);
+      // Reading through another machine may be reading another account. Start from what
+      // GitHub names for it, instead of keeping the account the earlier machine was signed in as.
+      if (machineId !== state.machineId) account = {};
+    }
+    const next: GithubConnectorState = { machineId, enabled, ...account, ...(state.lastRunAt ? { lastRunAt: state.lastRunAt } : {}) };
+    store.put(githubStateKey, 'state', next);
+    return githubView();
+  }
   plugins.register(workspaceSplash);
   function assertOwnerFeishuInbox(id:string) {
     ownerReadInput();
@@ -3235,7 +3337,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

@@ -493,6 +493,25 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method === 'GET') return json(res,200,gateway.commandGroup.get());
           if (method === 'POST') return json(res,200,await gateway.commandGroup.sync(await body(req)));
         }
+        if (path === '/api/v1/github/connector' && method === 'GET') return json(res, 200, app.githubView());
+        if (path === '/api/v1/github/connector' && method === 'PUT') {
+          const view = app.githubConfigure(await body(req));
+          // Saving turns the connector on. Reading at once tells the owner which account it
+          // found, instead of leaving the page to wait for the next scheduled read.
+          if (view.enabled) await app.githubPoll();
+          return json(res, 200, app.githubView());
+        }
+        if (path === '/api/v1/github/connector/poll' && method === 'POST') {
+          if (!app.githubView().enabled) throw new InputError('GitHub 连接未启用', 409);
+          await app.githubPoll();
+          return json(res, 200, app.githubView());
+        }
+        const githubRead = path.match(/^\/api\/v1\/github\/inbox\/([^/]+)$/);
+        if (githubRead && method === 'GET') {
+          const page = url.searchParams.has('page') ? Number(url.searchParams.get('page')) : 1;
+          if (url.searchParams.size > (url.searchParams.has('page') ? 1 : 0)) throw new InputError('只接受 page 参数');
+          return json(res, 200, await app.githubRead(decodeURIComponent(githubRead[1]!), page));
+        }
         if (path === '/api/v1/feishu/bots' && method === 'GET') {
           return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
             ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));

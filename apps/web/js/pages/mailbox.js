@@ -12,6 +12,7 @@ import { timeAgo, formatDate, deliveryLabels } from '../lib/format.js';
 import { Banner, Button, Card, Empty, Input, Pill, Select } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
 import { openDrawer } from '../ui/overlay.js';
+import { githubInboxBody, githubOriginalLink } from '../features/github-inbox.js';
 import { openInboxHandlingDrawer } from '../features/inbox-handling.js';
 
 const MAIL = { pending: '待确认', ready: '等待处理', processing: '处理中', rejected: '已拒绝', failed: '处理失败', unknown: '结果未知' };
@@ -28,7 +29,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   let snapshot = store.view.snapshot;
   let mailbox = [], deliveries = [];
   let error = '', loadError = '', loaded = false, loading = false, revision = 0, lastSnapshot;
-  let filePreview,reactions,pins,editHistory,historyChange,historyScope,relations, drawer, selected, detailKey, detailTranslation, mailboxOwner;
+  let filePreview,reactions,pins,editHistory,historyChange,historyScope,relations, githubBody, drawer, selected, detailKey, detailTranslation, mailboxOwner;
   const translation = incoming ? createInboxTranslation({ api, store,
     isSelected: id => drawer?.el.open && router.current.page === direction && selected === id }) : null;
   let sourceFilter = 'all', stageFilter = 'all';
@@ -385,6 +386,10 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     Button({ label: '归档', size: 'sm', onClick: () => act(item, 'archive') })];
   }
   function originalMessageLink(item) {
+    // A GitHub item opens the pull request or issue itself. The address is built from the
+    // validated repository and number, so it always points at github.com.
+    const github = incoming && item.raw?.origin?.github ? githubOriginalLink(item) : null;
+    if (github) return github;
     const origin = item.raw.origin, location = origin?.feishuLocation;
     if (!incoming || item.kind !== 'personal' || !location ||
         !['applink.feishu.cn','applink.larksuite.com'].includes(location.host) ||
@@ -402,6 +407,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     pins?.close();
     editHistory?.close();
     filePreview?.close();
+    githubBody = undefined;
     reactions = pins = editHistory = filePreview = historyScope = undefined;
   }
   function detail() {
@@ -416,6 +422,8 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       pins=incoming && item.kind==='personal'?inboxChatPins(api,store,raw,id=>open('personal:'+id)):undefined;
       editHistory=incoming && item.kind==='personal' ? inboxEditHistory(api,store,raw) : undefined;
       filePreview=incoming && item.kind==='personal' ? inboxFilePreview(api,store,raw) : undefined;
+      // The GitHub body is read once per item. Unrelated redraws of the detail must not read it again.
+      githubBody=incoming && raw.origin?.github ? githubInboxBody(api, raw) : undefined;
       historyScope=historyKey;historyChange=view.feishuEditHistoryChange;detailKey=undefined;
     }
     const showRelations = incoming && item.kind === 'personal' && snapshot?.plugins?.some(plugin => plugin.id === 'inbox-triage' && plugin.status === 'active');
@@ -436,6 +444,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       h('div', { class: 'row row--wrap' }, Pill(item.status, tone(item)), h('span', { class: 'small muted' }, item.source, ' · ', formatDate(item.time, true))),
       incoming && metadata(item),
       originalMessageLink(item),
+      githubBody?.el,
       !incoming && raw.sender && h('p', { class: 'small mailbox-meta' }, `最近发言人：${raw.sender}`),
       raw.target && h('p', { class: 'small mailbox-meta' }, `发送目标：${raw.target}`),
       raw.reason && h('p', { class: 'small muted' }, `分拣建议：${raw.reason.replace(/^注入分拣器：/, '')}`),
