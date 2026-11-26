@@ -1092,7 +1092,14 @@ export async function createWorkbench(config: AppConfig) {
     const result = await plugins.invocations.use('assistant-profile.manage', { action: 'read' });
     if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.name !== 'string'
       || typeof result.revision !== 'number' || !Number.isSafeInteger(result.revision)) throw new InputError('主助手资料无效', 500);
-    return { name: result.name, revision: result.revision };
+    // The avatar is passed on only as a picture's data address, and only when the plugin gave
+    // one: the page puts it straight into an image, so nothing else may come through here.
+    // The bound on its length is above the most the profile plugin keeps, which is 256 KB of
+    // picture, and is here so that nothing else can pass a huge string off as an avatar.
+    const avatar = result.avatar;
+    if (avatar !== undefined && (typeof avatar !== 'string' || avatar.length > 400_000
+      || !/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(avatar))) throw new InputError('主助手资料无效', 500);
+    return { name: result.name, revision: result.revision, ...(avatar !== undefined ? { avatar: avatar as string } : {}) };
   }
   async function currentProjectInstructions(projectId: string, audience: 'assistant' | 'executor' = 'assistant'): Promise<string> {
     const project = store.get<Project>('projects', projectId);

@@ -77,6 +77,11 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
   background: var(--brand-soft); color: var(--brand); font-size: calc(13px * var(--reading-scale, 1)); font-weight: 700;
 }
 .msg__label, .msg__meta { font-size: calc(12px * var(--reading-scale, 1)); color: var(--text-3); }
+/* On its own it is a small square; inside the message's avatar box it fills that box. */
+.avatar { display: grid; place-items: center; width: 28px; height: 28px; flex: none; overflow: hidden; border: 1px solid var(--brand-line); border-radius: var(--radius-sm); background: var(--brand-soft); color: var(--brand); font-size: calc(13px * var(--reading-scale, 1)); font-weight: 700; }
+.msg__avatar > .avatar { width: 100%; height: 100%; border: 0; border-radius: inherit; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar--preview { width: 56px; height: 56px; border-radius: var(--radius); font-size: 24px; }
 .msg--system { display: grid; gap: 4px; justify-items: center; text-align: center; color: var(--text-3); font-size: calc(13px * var(--reading-scale, 1)); }
 .msg--system details { text-align: left; max-width: 100%; }
 .msg--system summary { cursor: pointer; text-align: center; }

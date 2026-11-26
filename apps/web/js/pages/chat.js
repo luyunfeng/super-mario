@@ -29,7 +29,7 @@ import { createConversationExport } from '../features/conversation-export.js';
 import { conversationSearchActive } from '../features/search.js';
 import { createAttention } from '../features/attention.js';
 import { createCodeSidebar } from '../features/code-sidebar.js';
-import { mainAssistantName } from '../features/assistant-profile.js';
+import { assistantAvatar, mainAssistantName } from '../features/assistant-profile.js';
 import { createRecentWork } from '../features/recent-work.js';
 import { systemText } from '../copy/terms.js';
 import { agentProgress } from '../ui/agent-progress.js';
@@ -194,6 +194,7 @@ export function createChatPage({ api, store, scope, router }) {
   syncDraft();
   let snapshot = null;
   let assistantLabel = '主 Agent';
+  let assistantPicture;
   let lastCount = 0;
   let focusMessage = false;
   let scrollFrame;
@@ -335,7 +336,8 @@ export function createChatPage({ api, store, scope, router }) {
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
     const bubble = h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text));
     return h('article', { class: 'msg msg--assistant', dataset: { id: message.id } },
-      h('span', { class: 'msg__avatar', 'aria-hidden': 'true' }, 'M'),
+      personal ? h('span', { class: 'msg__avatar', dataset: { assistantAvatar: 'true' } }, assistantAvatar(assistantPicture, assistantLabel))
+        : h('span', { class: 'msg__avatar', 'aria-hidden': 'true' }, 'M'),
       h('div', { class: 'msg__col' },
         h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
@@ -419,10 +421,20 @@ export function createChatPage({ api, store, scope, router }) {
     onState({ snapshot: state, attention: items }) {
       snapshot = state;
       const nextLabel = mainAssistantName(store.view);
+      const nextPicture = store.view.snapshot?.mainAssistant;
       if (nextLabel !== assistantLabel) {
         assistantLabel = nextLabel;
         // 只更新署名，保留气泡正文的选区、焦点和搜索定位。
         for (const label of messages.querySelectorAll('[data-assistant-name]')) label.textContent = assistantLabel;
+      }
+      // The avatar follows the profile the same way: only it is replaced, so that what is
+      // selected or being read in a bubble is left where it is.
+      if (nextPicture?.avatar !== assistantPicture?.avatar || nextLabel !== assistantPicture?.name) {
+        assistantPicture = nextPicture;
+        for (const avatar of messages.querySelectorAll('[data-assistant-avatar]')) {
+          // The new avatar is the whole element, a picture or a letter. It replaces the old one.
+          avatar.replaceChildren(assistantAvatar(assistantPicture, assistantLabel));
+        }
       }
       code.show(scope.get());
       attention.update(items);

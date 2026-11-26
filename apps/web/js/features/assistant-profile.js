@@ -5,6 +5,44 @@ import { openDrawer } from '../ui/overlay.js';
 const active = view => !view.unauthorized && !!view.snapshot?.plugins?.some(
   plugin => plugin.id === 'assistant-profile' && plugin.status === 'active');
 
+/** The side of an avatar, in pixels. Every avatar is kept this size, whatever it was. */
+const AVATAR_SIZE = 128;
+/** The most a chosen picture may be before it is made small. One above it is refused at once. */
+const AVATAR_SOURCE_MAX = 8 * 1024 * 1024;
+
+/**
+ * Makes a chosen picture into an avatar: a square WebP of one fixed size, as a data address.
+ * The picture is cut to a square from its middle, so that a portrait does not come out
+ * squashed. Nothing is read of the file beyond the picture.
+ */
+export async function avatarFromFile(file) {
+  if (!file || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) throw new Error('请选择 PNG、JPEG、WebP 或 GIF 图片。');
+  if (file.size > AVATAR_SOURCE_MAX) throw new Error('图片不能超过 8 MB。');
+  const bitmap = await createImageBitmap(file).catch(() => { throw new Error('这张图片读不出来。'); });
+  try {
+    const side = Math.min(bitmap.width, bitmap.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = AVATAR_SIZE;
+    canvas.getContext('2d').drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.9));
+    if (!blob) throw new Error('这张图片转不成头像。');
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error('这张图片读不出来。'));
+      reader.readAsDataURL(blob);
+    });
+  } finally { bitmap.close(); }
+}
+
+/** The avatar of the main assistant as the page shows it: the picture, or the first letter. */
+export function assistantAvatar(profile, name) {
+  const avatar = profile?.avatar;
+  if (typeof avatar === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(avatar))
+    return h('img', { class: 'avatar', src: avatar, alt: '', width: AVATAR_SIZE, height: AVATAR_SIZE });
+  return h('span', { class: 'avatar', 'aria-hidden': 'true' }, Array.from(name || '助')[0]);
+}
+
 export function mainAssistantName(view) {
   return active(view) ? view.snapshot.mainAssistant?.name ?? '助手' : '主 Agent';
 }
@@ -13,7 +51,7 @@ export function createAssistantProfile({ api, store }) {
   let upcoming, scheduleOwner, scheduleError;
   let bots, botsOwner, botsError = '';
   const body = h('div', { class: 'stack' });
-  const edit = Button({ label: '修改名称', size: 'sm', onClick: open });
+  const edit = Button({ label: '修改资料', size: 'sm', onClick: open });
   const el = Card({ title: '主助手资料', id: 'assistant-profile', body, tools: edit });
 
   function update() {
@@ -30,6 +68,7 @@ export function createAssistantProfile({ api, store }) {
     const ready = agent?.available ? '可用' : agent ? '不可用' : '状态未知';
     const model = mode === 'demo' ? '演示模式 · ' + ready : ready;
     replace(body, h('dl', { class: 'kv' },
+      h('dt', null, '头像'), h('dd', null, assistantAvatar(mainAssistant, mainAssistant?.name)),
       h('dt', null, '名称'), h('dd', null, mainAssistant?.name ?? '读取主助手名称失败'),
       h('dt', null, '模型状态'), h('dd', null, online ? model : '连接中断，状态未知'),
       h('dt', null, '在线执行机'), h('dd', null, online && machines ? machines.filter(machine => machine.online).length + ' 台' : '状态未知'),
@@ -61,13 +100,40 @@ export function createAssistantProfile({ api, store }) {
     if (!active(store.view) || !initial) return;
     const token = api.token(), route = location.hash;
     let base = initial, latest, busy = false, review = false;
+    // What is to happen to the avatar: nothing, a new one, or none.
+    let avatar = initial.avatar ?? null, avatarTouched = false;
     const name = Input({ value: initial.name, required: true, oninput: sync });
+    const preview = h('span', { class: 'avatar avatar--preview' });
+    const show = () => replace(preview, assistantAvatar({ avatar }, name.value.trim()));
+    // The browser's own file control reads "Choose File" in its language. A button of the
+    // workbench's own stands in front of it, and the control itself is kept out of sight.
+    const choose = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', 'aria-label': '选择头像图片', hidden: true });
+    const pick = Button({ label: '选择图片', size: 'sm', onClick: () => choose.click() });
+    const remove = Button({ label: '移除头像', size: 'sm', onClick() { avatar = null; avatarTouched = true; choose.value = ''; show(); sync(); } });
+    choose.addEventListener('change', async () => {
+      const file = choose.files?.[0];
+      status.textContent = '';
+      if (!file) return;
+      if (!current()) return;
+      try {
+        avatar = await avatarFromFile(file);
+        if (!current()) return;
+        avatarTouched = true;
+        show();
+        sync();
+      } catch (cause) {
+        if (!current()) return;
+        choose.value = '';
+        status.textContent = cause.message;
+      }
+    });
     const status = h('p', { role: 'status', class: 'small' });
     const comparison = h('div', { class: 'stack' });
     const submit = Button({ label: '保存', kind: 'primary', type: 'submit' });
     const form = h('form', { class: 'stack', onsubmit(event) { event.preventDefault(); if (!review) void save(base); } },
+      h('div', { class: 'row row--wrap' }, preview, h('div', { class: 'stack' }, choose, pick, remove)),
       Field({ label: '主助手名称', control: name, hint: '1 至 40 个字符，显示在主对话的助手消息上。' }), status, comparison, submit);
-    const drawer = openDrawer({ title: '修改主助手名称', body: form, onClose() {
+    const drawer = openDrawer({ title: '修改主助手资料', body: form, onClose() {
       unsubscribe();
       drawer.body.replaceChildren();
     } });
@@ -80,7 +146,12 @@ export function createAssistantProfile({ api, store }) {
       name.setAttribute('aria-invalid', String(!valid));
       name.disabled = busy;
       submit.hidden = review;
-      submit.disabled = busy || !valid || review || base.name === name.value.trim();
+      // Saving is worth a click when the name is new or the avatar was changed.
+      submit.disabled = busy || !valid || review || (base.name === name.value.trim() && !avatarTouched);
+      remove.disabled = busy || !avatar;
+      choose.disabled = busy;
+      pick.disabled = busy;
+      show();
       const keep = comparison.querySelector('[data-save-name]');
       if (keep) keep.disabled = busy || !valid;
     }
@@ -98,6 +169,9 @@ export function createAssistantProfile({ api, store }) {
               if (!current() || busy) return;
               base = latest;
               name.value = base.name;
+              avatar = base.avatar ?? null;
+              avatarTouched = false;
+              choose.value = '';
               review = false;
               comparison.replaceChildren();
               status.textContent = '已采用当前名称。';
@@ -117,13 +191,17 @@ export function createAssistantProfile({ api, store }) {
       busy = true;
       sync();
       try {
-        const result = await api.post('/assistant-profile', { action: 'save', name: value, revision: version.revision });
+        const result = await api.post('/assistant-profile', { action: 'save', name: value, revision: version.revision,
+          ...(avatarTouched ? { avatar } : {}) });
         if (!current()) return;
         base = result;
         name.value = result.name;
+        avatar = result.avatar ?? null;
+        avatarTouched = false;
+        choose.value = '';
         review = false;
         comparison.replaceChildren();
-        status.textContent = '主助手名称已保存。';
+        status.textContent = '主助手资料已保存。';
         await store.refresh();
       } catch (cause) {
         if (!current()) return;

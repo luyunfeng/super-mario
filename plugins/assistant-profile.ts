@@ -22,6 +22,40 @@ export function requireRosterAssistant(store: Pick<Store, 'get'>, id: string): v
   if (store.get<Assistant>(roster,id)?.id !== id) fail(404, '未找到助理');
 }
 
+/** The most an avatar may take, decoded. It is kept whole in the workbench's data. */
+export const AVATAR_MAX_BYTES = 256 * 1024;
+/** The kinds of picture an avatar may be. SVG is not among them: it can hold a script. */
+const AVATAR_TYPES: Record<string, string> = { png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+
+/**
+ * What the request says about the avatar: a new one, none (remove it), or nothing (leave it).
+ *
+ * A picture is taken only as a data address of one of the allowed kinds, whose bytes decode
+ * to no more than the bound. Nothing else is kept, so the page never puts a foreign address
+ * or a script where the avatar goes.
+ */
+export function avatarChange(value: unknown): { set: string | null } | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return { set: null };
+  if (typeof value !== 'string' || value.length > Math.ceil(AVATAR_MAX_BYTES / 3) * 4 + 40) fail(400, '头像无效');
+  const match = /^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+  if (!match || !AVATAR_TYPES[match[1]!]) fail(400, '头像须为 PNG、JPEG、WebP 或 GIF 图片');
+  const bytes = Buffer.from(match[2]!, 'base64');
+  if (!bytes.length || bytes.byteLength > AVATAR_MAX_BYTES) fail(400, '头像须为 1 字节至 256 KB 的图片');
+  // The bytes must begin as the address says, so a page is not offered as a picture. The whole
+  // of the picture is not decoded here: the page reads a chosen picture before it is sent, and
+  // one that is sent past the page and does not decode only shows as nothing to its sender.
+  const head = bytes.subarray(0, 12);
+  const is = {
+    png: head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47,
+    jpeg: head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff,
+    webp: head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WEBP',
+    gif: ['GIF87a', 'GIF89a'].includes(head.subarray(0, 6).toString('latin1')),
+  };
+  if (!is[match[1]! as keyof typeof is]) fail(400, '图片内容和它声称的类型不一致');
+  return { set: value };
+}
+
 export function readWebThreadAssistant(store: Pick<Store,'get'>, threadId:string):ReturnType<typeof assistantView>|undefined {
   const owner=store.get<Binding>(owners,threadId);
   if(!owner || owner.threadId!==threadId || store.get<Binding>(bindings,bindingKey(owner.assistantId,owner.projectId))?.threadId!==threadId) return;
@@ -126,7 +160,7 @@ export function createAssistantProfile(useWebConversations?:UseWebConversations)
         if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '主助手资料参数必须为对象');
         const { action, revision } = input;
         if (action !== 'read' && action !== 'save') fail(400, '主助手资料操作无效');
-        const allowed = action === 'read' ? ['action'] : ['action', 'name', 'revision'];
+        const allowed = action === 'read' ? ['action'] : ['action', 'name', 'revision', 'avatar'];
         if (Object.keys(input).some(key => !allowed.includes(key))) fail(400, '主助手资料包含未知字段');
         if (action === 'read') return read();
         if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER)
@@ -136,11 +170,14 @@ export function createAssistantProfile(useWebConversations?:UseWebConversations)
           fail(400, '名称不能包含控制字符或换行');
         const name = input.name.trim();
         if (!name || name.length > 80 || Array.from(name).length > 40) fail(400, '名称须为 1 至 40 个字符');
+        // The avatar is checked before anything is written, so a bad one changes nothing.
+        const avatar = avatarChange(input.avatar);
         return store.transaction(() => {
           const current = read();
           if (current.revision !== revision) fail(409, '主助手资料已更新，请重新加载');
-          if (name === current.name) return current;
-          const next = { name, revision: revision + 1 };
+          const nextAvatar = avatar === undefined ? current.avatar : avatar.set === null ? undefined : avatar.set;
+          if (name === current.name && nextAvatar === current.avatar) return current;
+          const next: MainAssistantProfile = { name, revision: revision + 1, ...(nextAvatar ? { avatar: nextAvatar } : {}) };
           store.put('assistant-profile', 'main', next);
           events.publish('assistant-profile.changed', { revision: next.revision });
           return next;

@@ -52,7 +52,7 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await expect(label).toHaveText('主 Agent');
   await expect(resultLabel).toHaveText('执行结果');
   const card = (page: Page) => page.locator('#assistant-profile');
-  const editor = (page: Page) => page.getByRole('dialog', { name: '修改主助手名称', exact: true });
+  const editor = (page: Page) => page.getByRole('dialog', { name: '修改主助手资料', exact: true });
   const name = (page: Page) => editor(page).getByLabel('主助手名称', { exact: true });
   const action = (page: Page, text: string) => editor(page).getByRole('button', { name: text, exact: true });
   await expect(card(first)).toContainText('演示模式 · 可用');
@@ -107,7 +107,7 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await expect(card(first)).toContainText('0 个');
   for (const page of [first, second]) {
     await expect(card(page)).toContainText('主 Agent');
-    await card(page).getByRole('button', { name: '修改名称', exact: true }).click();
+    await card(page).getByRole('button', { name: '修改资料', exact: true }).click();
     await expect(name(page)).toHaveValue('主 Agent');
   }
   const draft = '合成甲助手', remote = '合成乙助手';
@@ -145,3 +145,88 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await expect(label).toHaveText(draft);
   assert.equal(server.app.store.list('runs').length, 0);
 });
+
+test('主助手可以设置和移除头像，头像显示在资料卡和主对话的气泡上', { timeout: 45000 }, async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-assistant-avatar-'));
+  const token = 'offline-avatar';
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir, token, demo: true });
+  server.app.store.put('messages', 'fixture-reply', {
+    role: 'assistant', status: 'done', createdAt: '2026-03-01T10:00:00.000Z', conversationId: 'main', id: 'fixture-reply', text: '带头像的回复。',
+  } as Message);
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  t.after(async () => {
+    await browser?.close();
+    await server.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  const agent = await browser.newPage(), chat = await browser.newPage();
+  for (const [page, route] of [[agent, 'agent'], [chat, 'chat']] as const) {
+    await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+    await page.goto(server.url + '/#' + route + '?token=' + token);
+  }
+  const card = agent.locator('#assistant-profile');
+  const avatarIn = (root: typeof card) => root.locator('.avatar');
+  // Without a picture the avatar is the first letter of the name.
+  await expect(avatarIn(card)).toHaveText('主');
+  await expect(chat.locator('[data-id="fixture-reply"] [data-assistant-avatar]')).toHaveText('主');
+
+  // A picture is drawn here, by the browser itself, so that it is one the browser can read.
+  const picture = await agent.evaluate(async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 300; canvas.height = 200;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#c7352a'; context.fillRect(0, 0, 300, 200);
+    context.fillStyle = '#fff9ed'; context.fillRect(120, 60, 60, 80);
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('the browser made no picture')), 'image/png'));
+    return await new Promise<string>(resolve => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]!); reader.readAsDataURL(blob); });
+  });
+  await card.getByRole('button', { name: '修改资料', exact: true }).click();
+  const editor = agent.getByRole('dialog', { name: '修改主助手资料', exact: true });
+  // The name is unchanged, so there is nothing to save until the picture is chosen.
+  const save = editor.getByRole('button', { name: '保存', exact: true });
+  await expect(save).toBeDisabled();
+  await editor.getByLabel('选择头像图片').setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: Buffer.from(picture, 'base64') });
+  const preview = editor.locator('.avatar--preview');
+  await expect(preview.locator('img')).toBeVisible();
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(editor.getByRole('status')).toContainText('主助手资料已保存');
+  // The card and the chat bubble now show the picture, cut to a square.
+  await expect(card.locator('img.avatar')).toHaveAttribute('src', /^data:image\/webp;base64,/);
+  await expect(chat.locator('[data-id="fixture-reply"] img.avatar')).toHaveAttribute('src', /^data:image\/webp;base64,/);
+  // The chat page was not reloaded: the bubble's text is still selected and in place.
+  await expect(chat.locator('[data-id="fixture-reply"]')).toContainText('带头像的回复。');
+  const stored = asProfile(await server.app.plugins.invocations.use('assistant-profile.manage', { action: 'read' }));
+  assert.match(String(stored.avatar), /^data:image\/webp;base64,/);
+  assert.equal(stored.name, '主 Agent');
+  assert.equal(stored.revision, 1);
+
+  // A file that is not a picture is refused, and says why.
+  // The drawer stays open after a save, so that more can be changed; it is closed first.
+  await editor.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(editor).toBeHidden();
+  await card.getByRole('button', { name: '修改资料', exact: true }).click();
+  await editor.getByLabel('选择头像图片').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a picture') });
+  await expect(editor.getByRole('status')).toContainText('请选择 PNG、JPEG、WebP 或 GIF 图片。');
+  await expect(save).toBeDisabled();
+
+  // Removing it brings back the letter.
+  await editor.getByRole('button', { name: '移除头像', exact: true }).click();
+  await expect(preview.locator('img')).toHaveCount(0);
+  await expect(preview).toHaveText('主');
+  await save.click();
+  await expect(card.locator('img.avatar')).toHaveCount(0);
+  await expect(card.locator('.avatar')).toHaveText('主');
+  await expect(chat.locator('[data-id="fixture-reply"] img.avatar')).toHaveCount(0);
+  const after = asProfile(await server.app.plugins.invocations.use('assistant-profile.manage', { action: 'read' }));
+  assert.equal('avatar' in after, false);
+  assert.equal(after.revision, 2);
+});
+
+/** What the service answers with, as the profile it is. The service says it is a Json value. */
+function asProfile(value: unknown): { name: string; revision: number; avatar?: string } {
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value), 'the service answers with a profile');
+  return value as { name: string; revision: number; avatar?: string };
+}
+
