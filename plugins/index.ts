@@ -229,6 +229,8 @@ export interface SystemActions {
   mailboxPropose?(input: Record<string, unknown>): Json;
   projectsList?(): Json;
   projectLessonsList?(projectId: string): Json;
+  /** One read for the assistant's GitHub tools. The input was checked by the tool. */
+  githubTool?(method: 'search' | 'issue' | 'comments' | 'diff' | 'checks', input: JsonObject): Promise<unknown>;
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
@@ -348,6 +350,42 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }, { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }, ['id', 'version']));
           if (actions.projectsList) context.contribute('tools', 'projects_list', tool('projects_list', '列出工作台项目及归档状态。', async (_args, signal) => { signal.throwIfAborted(); return actions.projectsList!(); }));
           if (actions.projectLessonsList) context.contribute('tools', 'project_lessons_list', tool('project_lessons_list', '列出某个项目已验收任务留下的经验。只读。主人问某个项目学到了什么、有哪些要避免的做法时使用；需要改正或删除时，引导主人在项目的「跟进」页打开「项目经验」。', async (args, signal) => { signal.throwIfAborted(); return actions.projectLessonsList!(String(args.projectId)); }, { projectId: { type: 'string' } }, ['projectId']));
+          // GitHub reads go through the owner's connected machine. Each tool checks its own
+          // input here, so the machine only receives well-formed arguments.
+          // The assistant names what it wants. The machine names the read it performs.
+          const githubMethods = { github_search: 'search', github_read: 'issue', github_diff: 'diff', github_checks: 'checks' } as const;
+          const githubRead = (name: keyof typeof githubMethods, description: string, properties: Parameters<typeof tool>[3], required: string[] | undefined,
+            check: (args: Record<string, unknown>) => JsonObject) => tool(name, description, async (args, signal) => {
+            signal.throwIfAborted();
+            return await actions.githubTool!(githubMethods[name], check(args)) as Json;
+          }, properties, required);
+          if (actions.githubTool) {
+            const repo = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(value);
+            const number = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+            const only = (args: Record<string, unknown>, allowed: string[]) => { if (Object.keys(args).some(key => !allowed.includes(key))) throw new Error('参数无效'); };
+            context.contribute('tools', 'github_search', githubRead('github_search', '搜索当前登录账号能读到的 GitHub 议题和合并请求。query 用 GitHub 搜索语法，例如 is:pr is:open review-requested:@me 或 is:issue involves:@me。只读。',
+              { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 30 } }, ['query'], args => {
+              only(args, ['query', 'limit']); if (typeof args.query !== 'string' || !args.query.trim()) throw new Error('请提供搜索词');
+              if (args.limit !== undefined && (typeof args.limit !== 'number' || !Number.isSafeInteger(args.limit) || args.limit < 1 || args.limit > 30)) throw new Error('条数须为 1 至 30 的整数');
+              return { query: args.query, ...(typeof args.limit === 'number' ? { limit: args.limit } : {}) };
+            }));
+            context.contribute('tools', 'github_read', githubRead('github_read', '读取一个议题或合并请求的标题、正文和最近的评论。需要 repository（owner/repo）和 number。只读。',
+              { repository: { type: 'string' }, number: { type: 'integer', minimum: 1 } }, ['repository', 'number'], args => {
+              only(args, ['repository', 'number']); if (!repo(args.repository) || !number(args.number)) throw new Error('需要有效的仓库和编号');
+              return { repository: args.repository, number: args.number };
+            }));
+            context.contribute('tools', 'github_diff', githubRead('github_diff', '读取一个合并请求的差异。可传 path 只看一个文件。只读。',
+              { repository: { type: 'string' }, number: { type: 'integer', minimum: 1 }, path: { type: 'string' } }, ['repository', 'number'], args => {
+              only(args, ['repository', 'number', 'path']); if (!repo(args.repository) || !number(args.number)) throw new Error('需要有效的仓库和编号');
+              if (args.path !== undefined && (typeof args.path !== 'string' || !args.path.trim())) throw new Error('文件路径无效');
+              return { repository: args.repository, number: args.number, ...(typeof args.path === 'string' ? { path: args.path } : {}) };
+            }));
+            context.contribute('tools', 'github_checks', githubRead('github_checks', '读取一个合并请求的检查状态，逐项列出名称、状态和结论。只读。',
+              { repository: { type: 'string' }, number: { type: 'integer', minimum: 1 } }, ['repository', 'number'], args => {
+              only(args, ['repository', 'number']); if (!repo(args.repository) || !number(args.number)) throw new Error('需要有效的仓库和编号');
+              return { repository: args.repository, number: args.number };
+            }));
+          }
           if (actions.projectsDiscover) context.contribute('tools', 'projects_discover', tool('projects_discover', '只读发现已连接电脑上已有的项目文件夹。不会创建项目或执行工作；开发项目先发现目录，再绑定电脑和目录。', async (args, signal) => { signal.throwIfAborted(); return actions.projectsDiscover!(args); }, { machineId: { type: 'string' }, roots: { type: 'array', items: { type: 'string' } } }));
           if (actions.workspaceCode) {
             context.contribute('tools', 'workspace_code_list', tool('workspace_code_list', '只读浏览已绑定项目工作区的目录结构（受敏感文件与根目录边界保护）。', async (args, signal) => { signal.throwIfAborted(); return actions.workspaceCode!({ projectId: typeof args.projectId === 'string' ? args.projectId : undefined, kind: 'tree', path: typeof args.path === 'string' ? args.path : '' }); }, { projectId: { type: 'string', description: '已绑定目录的项目 ID。' }, path: { type: 'string', description: '可选，项目内相对目录路径。' } }));

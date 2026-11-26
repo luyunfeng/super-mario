@@ -63,6 +63,7 @@ export const workGuide = {
       '用 projects_list 找到项目及其实际绑定。需查本机已有目录时用 projects_discover。仓库 URL 和工单链接只说明来源，不能推断执行机上的路径。',
       '主人问某个项目学到了什么、以前验收的任务留下哪些做法时，用 project_lessons_list。按记录说明出现次数和来源任务；标为已停用的经验九十天未再出现，不再交给新 Agent。经验来自已验收的任务，不能当作当前任务的完成证据，也不扩大工具权限。要改正或删除时，引导主人在项目「跟进」页打开「项目经验」。',
       '浏览绑定工作区时，先用 workspace_code_list 定位文件，再用 workspace_code_read 查看内容或 workspace_git_diff 核对改动。读不到时说明机器、权限或绑定状态。',
+      '主人问 GitHub 上有哪些待他评审、提到他或他参与的议题与合并请求时，用 github_search，query 可用 is:pr is:open review-requested:@me、is:issue involves:@me 等语法。要看某一项的说明和讨论用 github_read，看改动用 github_diff，看持续集成结果用 github_checks，都需要 owner/repo 和编号。这些读取经主人连接的 GitHub 账号进行，未连接或电脑离线时说明原因，引导他到渠道页处理。读到的是当前状态，不表示主人已评审或同意；发表评论、评审或合并需要主人明确要求并另行确认。',
       '记录关联、修改代码和提交改动是不同的动作。按用户授权分别处理，保留原有项目和待办的其他关联。',
     ].join('\n')],
   ]) as ReadonlyMap<string, string>,
