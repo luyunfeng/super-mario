@@ -62,6 +62,19 @@ export interface Mailbox {
   total: number;
 }
 
+/** What one search of the mail is asked for. */
+export interface SearchRequest {
+  /** The account to search. Every account's inbox is searched when it is left out. */
+  account?: string;
+  /** The folder to search. The inbox when left out. */
+  mailbox?: string;
+  query?: string;
+  /** How many matches one page holds at most. */
+  limit?: number;
+  /** Continue from below this UID. */
+  beforeUid?: number;
+}
+
 /** One message in a list. The body is not part of it. */
 export interface MailSummary {
   account: string;

@@ -49,8 +49,9 @@ import { createSealedStore } from './sealed-store.ts';
 import { createMailAccounts } from './mail-accounts.ts';
 import { createMailReader } from './mail-reader.ts';
 import { executeMailSend, MAIL_SEND_APPROVAL, proposeMailSend } from './mail-outbox.ts';
-import { classifyImapError, connectionOptions, ImapError, libraryOpen, type OpenImap } from './mail-imap.ts';
+import { classifyImapError, connectionOptions, ImapError, libraryOpen, type ImapClient, type OpenImap } from './mail-imap.ts';
 import { MessageError, readMessage } from './mail-message.ts';
+import { searchFolder } from './mail-search.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -101,7 +102,7 @@ import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessag
 import { runCitation, eraseWebConversationRegistration, webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, createBrowserDevices, createUsageSources, type UsageWindowCache, type UsageInventoryPage, type UsageInventoryReader, feishuMessageReactionsExtension, type FeishuReactionReader, feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, browserNotifications, readingFonts, assistantCardExamples, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, createAssistantProfile, requireRosterAssistant, readWebThreadAssistant, projectInstructions, createConversationSharing, createWorkspaceBoard, createSavedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage, TRANSCRIPTION_AUDIO, TRANSCRIPTION_MAX_SECONDS } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
-import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
+import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, MailAccount, Message, MessageRoute, Project, Run, SearchRequest, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
 export class InputError extends Error {
@@ -511,7 +512,7 @@ export async function createWorkbench(config: AppConfig) {
     }
     return raw as unknown as Json;
   }
-  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), knowledgeCommentsService:()=>commentsService(false), knowledgeCommentWriteService:()=>commentsService(true), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxFileText: (id,signal)=>ownerFeishuRead(id,()=>feishuFileReader?.(id,signal)), inboxList: readInbox, inboxTree: readInboxTree, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectLessonsList: (projectId: string) => projectLessonsApi.list(projectId) as unknown as Json, githubTool, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
+  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), knowledgeCommentsService:()=>commentsService(false), knowledgeCommentWriteService:()=>commentsService(true), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxFileText: (id,signal)=>ownerFeishuRead(id,()=>feishuFileReader?.(id,signal)), inboxList: readInbox, inboxTree: readInboxTree, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectLessonsList: (projectId: string) => projectLessonsApi.list(projectId) as unknown as Json, githubTool, mailTool, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
@@ -635,28 +636,81 @@ export async function createWorkbench(config: AppConfig) {
   // they connect is kept here, so that both use the same.
   let mailOpen: OpenImap = libraryOpen();
   const mailReader = createMailReader({ accounts: mailAccounts, open: options => mailOpen(options) });
+  /** One call from the assistant's mail tools. Each goes to what does it, so the tool
+   *  checks the input and the workbench does the reading or asks for the approval. */
+  async function mailTool(name: 'accounts' | 'search' | 'read' | 'send', input: Record<string, unknown>, signal: AbortSignal): Promise<Json> {
+    // Every mailbox the owner added can be used from here, and none other.
+    const own = (id: unknown) => {
+      if (typeof id !== 'string' || !mailAccounts.list().some(account => account.id === id)) throw new InputError('邮箱账号不存在，请先用 mail_accounts 查看已添加的邮箱', 404);
+      return id;
+    };
+    if (name === 'accounts') return mailAccounts.list().map(account => ({ id: account.id, name: account.name, email: account.email, status: account.status, ...(account.error ? { error: account.error } : {}) })) as unknown as Json;
+    if (name === 'send') {
+      const account = input.account ?? input.account_id;
+      const approval = proposeMailSend({ ...input, ...(account !== undefined ? { account: own(account) } : {}) }, mailAccounts, item => approvals.propose(item));
+      return { id: approval.id, status: approval.status } as unknown as Json;
+    }
+    if (name === 'search') {
+      // The tool has checked the arguments and named them as the search takes them. Only
+      // the account is looked at here, because it decides whose mail may be read.
+      if (input.account !== undefined) own(input.account);
+      return await searchMail(input as unknown as SearchRequest, signal) as unknown as Json;
+    }
+    // As with a search: the tool checked the arguments. The account is looked at here.
+    own(input.account);
+    return await readMail(String(input.account), Number(input.uid), String(input.mailbox), signal) as unknown as Json;
+  }
   // An email the assistant asks to send is an approval. Nothing goes out until the owner
   // approves it, and what goes out is read back from the approval when they do.
   function proposeMail(input: Record<string, unknown>) {
     return proposeMailSend(input, mailAccounts, input => approvals.propose(input));
   }
-  /** Reads one message in full. The password is taken out for the connection and is not
-   *  kept. Reading does not mark the message as read. */
-  async function readMail(accountId: string, uid: number, mailbox: string, signal: AbortSignal) {
+  /** Opens one account's mail server with its sealed password. The password is used for the
+   *  connection and is not kept, and the connection is closed when the read is over. */
+  async function withMail<T>(accountId: string, signal: AbortSignal, read: (client: ImapClient, account: MailAccount) => Promise<T>): Promise<T> {
     const account = mailAccounts.get(accountId);
     const password = await mailAccounts.password(accountId);
     if (password === undefined) throw new ImapError('authentication', '这个账号还没有密码，请重新填写。');
     let client;
     try {
       client = await mailOpen(connectionOptions(account, password));
-      const read = await readMessage(client, { account: account.id, mailbox, uid }, signal);
-      // The contents are for saving an attachment, which the page asks for on its own.
-      // They are not part of what a read returns.
-      return read.message;
+      return await read(client, account);
     } catch (error) {
       if (signal.aborted || error instanceof MessageError || error instanceof ImapError) throw error;
       throw classifyImapError(error);
     } finally { await client?.logout().catch(() => {}); }
+  }
+  /** Reads one message in full. Reading does not mark the message as read. */
+  async function readMail(accountId: string, uid: number, mailbox: string, signal: AbortSignal) {
+    return withMail(accountId, signal, async (client, account) => {
+      const read = await readMessage(client, { account: account.id, mailbox, uid }, signal);
+      // The contents are for saving an attachment, which the page asks for on its own.
+      // They are not part of what a read returns.
+      return read.message;
+    });
+  }
+  /** Searches one account, or every account's inbox, for the assistant. */
+  async function searchMail(request: SearchRequest, signal: AbortSignal) {
+    // Without an account every inbox is searched. One that cannot be is named in the answer,
+    // so the assistant does not read the page as the whole of the owner's mail.
+    const accounts = request.account ? [mailAccounts.get(request.account)] : mailAccounts.list();
+    const answers = await Promise.all(accounts.map(async account => {
+      try { return { account, page: await withMail(account.id, signal, client => searchFolder(client, account, { ...request, account: undefined }, signal)) }; }
+      catch (error) { if (signal.aborted) throw error; return { account, error: error instanceof Error ? error.message : '读取邮箱失败' }; }
+    }));
+    const limit = Math.max(1, Math.min(200, request.limit ?? 20));
+    const found = answers.flatMap(item => item.page ? item.page.messages : []);
+    // Newest first over every account, and then the newest that fit one page.
+    found.sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.uid - a.uid);
+    const single = request.account ? answers[0] : undefined;
+    return {
+      messages: found.slice(0, limit),
+      // A UID says where to continue in one account only.
+      hasMore: found.length > limit || answers.some(item => item.page?.hasMore),
+      ...(single?.page?.nextBeforeUid ? { nextBeforeUid: single.page.nextBeforeUid } : {}),
+      headersOnly: answers.some(item => item.page?.headersOnly),
+      failed: answers.flatMap(item => item.error ? [{ account: item.account.id, name: item.account.name, message: item.error }] : []),
+    };
   }
   /** Reads the audio of one transcription from a request. The body is already PCM16 mono
    *  16 kHz, which the owner's browser made from what it recorded, so no audio library runs
@@ -3501,7 +3555,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, proposeMail, MAIL_SEND_APPROVAL,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, searchMail, mailTool, proposeMail, MAIL_SEND_APPROVAL,
     setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,

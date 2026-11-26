@@ -1,5 +1,6 @@
 export {webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, eraseWebConversationRegistration} from './web-conversations.ts';
 import { documentHeadings } from '../packages/core/src/document-headings.ts';
+import { mailTools } from './mail-tools.ts';
 import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';
 import { calendarDayFormatter, localDayFormatter, validateLocalDay } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
@@ -231,6 +232,8 @@ export interface SystemActions {
   projectLessonsList?(projectId: string): Json;
   /** One read for the assistant's GitHub tools. The input was checked by the tool. */
   githubTool?(method: 'search' | 'issue' | 'comments' | 'diff' | 'checks', input: JsonObject): Promise<unknown>;
+  /** The assistant's mail reads and send requests. They go to the mailboxes the owner added. */
+  mailTool?(name: 'accounts' | 'search' | 'read' | 'send', input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
@@ -348,6 +351,17 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (actions.answerQuestion) context.contribute('tools', 'interaction_answer', tool('interaction_answer', '在原对话提交主人本轮明确给出的答案。执行中的结构化问题先用 runs_list 按执行 id 读取 blockedBy，核对原卡 id 和 version，从原卡核对题目与选项，只传 id/version；工作台从主人消息读取选择。同来源只有一张可答执行卡且只有一题时，主人可单独发送原选项。其他情况请主人发送「回答提问 <id> v<version>」，随后逐行填「1. 原选项」，多选同题分行。不得用建议、引述或否定当答案。按回执的 delivery 报告送达，unknown 不重试。纯文字问题另传 text。权限、计划和验收须主人直接确认。', async (args, signal) => {
             signal.throwIfAborted(); return actions.answerQuestion!(String(args.id ?? ''), Number(args.version), String(args.text ?? ''));
           }, { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }, ['id', 'version']));
+          // Mail goes to the mailboxes the owner added. Reading is theirs to read and sending
+          // is an approval, so the tools only ask the workbench for each.
+          if (actions.mailTool) {
+            const mail = mailTools({
+              accounts: () => actions.mailTool!('accounts', {}, new AbortController().signal) as Promise<Json[]>,
+              search: (input, signal) => actions.mailTool!('search', { ...input }, signal) as Promise<Json>,
+              read: (input, signal) => actions.mailTool!('read', input, signal) as Promise<Json>,
+              proposeSend: input => actions.mailTool!('send', input, new AbortController().signal) as Promise<Json>,
+            });
+            for (const item of mail) context.contribute('tools', item.name, item);
+          }
           if (actions.projectsList) context.contribute('tools', 'projects_list', tool('projects_list', '列出工作台项目及归档状态。', async (_args, signal) => { signal.throwIfAborted(); return actions.projectsList!(); }));
           if (actions.projectLessonsList) context.contribute('tools', 'project_lessons_list', tool('project_lessons_list', '列出某个项目已验收任务留下的经验。只读。主人问某个项目学到了什么、有哪些要避免的做法时使用；需要改正或删除时，引导主人在项目的「跟进」页打开「项目经验」。', async (args, signal) => { signal.throwIfAborted(); return actions.projectLessonsList!(String(args.projectId)); }, { projectId: { type: 'string' } }, ['projectId']));
           // GitHub reads go through the owner's connected machine. Each tool checks its own

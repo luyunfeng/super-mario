@@ -1,4 +1,4 @@
-import type { MailAddress, MailSummary } from '../../protocol/src/mail.ts';
+import type { MailAddress, MailSummary, SearchRequest } from '../../protocol/src/mail.ts';
 import { hasAttachments, mailDate, searchable, type ImapClient } from './mail-imap.ts';
 
 /** How many matches one page holds unless fewer are asked for, and the most it may hold. */
@@ -22,18 +22,6 @@ export interface SearchPage {
   /** The server found nothing for the word, so the headers were matched here. The bodies of
    *  the messages were not looked into. */
   headersOnly: boolean;
-}
-
-/** What one search was asked for. */
-export interface SearchRequest {
-  /** Empty means every account's inbox. */
-  account?: string;
-  /** The folder to search. The inbox when empty. */
-  mailbox?: string;
-  query?: string;
-  limit?: number;
-  /** Continue from below this UID. */
-  beforeUid?: number;
 }
 
 const SLASH = String.fromCharCode(92);
