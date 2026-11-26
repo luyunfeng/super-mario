@@ -2,9 +2,11 @@
 // every call runs `gh api`, and only validated, typed data crosses back to the server.
 // Nothing here starts an AI coding agent.
 import { execFile } from 'node:child_process';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { JsonObject, Json, NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 
-export type GhRun = (args: string[], options: { signal: AbortSignal; timeout?: number }) => Promise<string>;
+export type GhRun = (args: string[], options: { signal: AbortSignal; timeout?: number; input?: string }) => Promise<string>;
 type Row = Record<string, unknown>;
 
 /** Why a read could not be done. Only these fixed reasons reach the server, never CLI output. */
@@ -52,7 +54,7 @@ export const runGh: GhRun = (args, options) => new Promise((resolve, reject) => 
     resolve(String(stdout ?? ''));
   });
   child.stdin?.on('error', () => { /* execFile reports the failure through its callback. */ });
-  child.stdin?.end('');
+  child.stdin?.end(options.input ?? '');
 });
 
 function object(value: unknown): Row | undefined {
@@ -66,10 +68,13 @@ function text(value: unknown, max: number): string {
 function integer(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
-async function json(run: GhRun, path: string, signal: AbortSignal): Promise<Row | Row[]> {
+async function json(run: GhRun, path: string, signal: AbortSignal, write?: { method: 'POST'; body: Row }): Promise<Row | Row[]> {
   signal.throwIfAborted();
   let raw: string;
-  try { raw = await run(['api', '--method', 'GET', path], { signal }); }
+  // A write sends its body on standard input. It never appears in the argument list, where
+  // another process on the machine could read it.
+  try { raw = await run(write ? ['api', '--method', write.method, path, '--input', '-'] : ['api', '--method', 'GET', path],
+    { signal, ...(write ? { input: JSON.stringify(write.body) } : {}) }); }
   catch (error) {
     if (error instanceof GhError) throw error;
     // A token in a URL, a header or a message must not become an error shown to the owner.
@@ -245,6 +250,92 @@ export async function ghChecks(run: GhRun, signal: AbortSignal, repository: stri
   return { ref: sha, state: text(pull?.mergeable_state, 40), items };
 }
 
+/**
+ * Comments the owner approved, each under a key the server chose. GitHub has no idempotency
+ * key for creating a comment, so the key is remembered here: the same key is never posted
+ * twice, whatever happens after the request was sent.
+ */
+export function createGithubCommentStore(directory: string) {
+  const file = join(directory, 'github-comments.json');
+  async function read(): Promise<Record<string, { at: string; url?: string; state: 'sent' | 'unknown' }>> {
+    try {
+      const value = JSON.parse(await readFile(file, 'utf8')) as unknown;
+      return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, { at: string; url?: string; state: 'sent' | 'unknown' }> : {};
+    } catch { return {}; }
+  }
+  async function write(next: Record<string, { at: string; url?: string; state: 'sent' | 'unknown' }>) {
+    await mkdir(directory, { recursive: true });
+    const temporary = file + '.' + process.pid + '.tmp';
+    await writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
+    await rename(temporary, file);
+  }
+  return {
+    /** Marks the key as begun. Returns false when this key was already used. */
+    async begin(key: string): Promise<boolean> {
+      const current = await read();
+      if (current[key]) return false;
+      // Written before the request goes out. A crash after sending leaves the key used and
+      // the outcome unknown, which is reported rather than retried.
+      current[key] = { at: new Date().toISOString(), state: 'unknown' };
+      await write(current);
+      return true;
+    },
+    async finish(key: string, url: string) {
+      const current = await read();
+      current[key] = { at: current[key]?.at ?? new Date().toISOString(), url, state: 'sent' };
+      await write(current);
+    },
+    async outcome(key: string) { return (await read())[key]; },
+    /** Gives back a key whose request never reached GitHub. */
+    async release(key: string) {
+      const current = await read();
+      if (current[key]?.state !== 'unknown') return;
+      delete current[key];
+      await write(current);
+    },
+  };
+}
+export type GithubCommentStore = ReturnType<typeof createGithubCommentStore>;
+
+/** One comment on an issue or pull request. It is posted once under its key. */
+export async function ghComment(run: GhRun, comments: GithubCommentStore, signal: AbortSignal, input: {
+  repository: string; number: number; body: string; key: string;
+}): Promise<{ state: 'sent' | 'already-sent' | 'unknown'; url?: string }> {
+  const repo = repositoryOf(input.repository);
+  if (!Number.isSafeInteger(input.number) || input.number < 1 || input.number > 10_000_000) throw new GhError('bad_response');
+  if (typeof input.body !== 'string' || !input.body.trim() || Array.from(input.body).length > 65_536) throw new GhError('bad_response');
+  if (!/^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$/.test(input.key)) throw new GhError('bad_response');
+  const before = await comments.outcome(input.key);
+  if (before) return before.state === 'sent' ? { state: 'already-sent', url: before.url }
+    : before.url ? { state: 'unknown', url: before.url } : { state: 'unknown' };
+  if (!(await comments.begin(input.key))) {
+    // Another call took the key between the two reads. Its outcome is what the caller is told.
+    const raced = await comments.outcome(input.key);
+    return { state: raced?.state === 'sent' ? 'already-sent' : 'unknown', ...(raced?.url ? { url: raced.url } : {}) };
+  }
+  signal.throwIfAborted();
+  let result: Row | Row[];
+  try {
+    result = await json(run, 'repos/' + repo + '/issues/' + input.number + '/comments', signal, { method: 'POST', body: { body: input.body } });
+  } catch (error) {
+    // gh refusing before it reaches GitHub (not installed, not signed in, no permission, a
+    // rate limit) means nothing was posted. The key is given back so the owner can retry.
+    if (error instanceof GhError && ['not_installed', 'not_signed_in', 'forbidden', 'rate_limited'].includes(error.kind)) {
+      await comments.release(input.key);
+      throw error;
+    }
+    // Anything else may have happened after the request was sent. It is reported as unknown
+    // and never sent again, because the owner could end up with two comments.
+    return { state: 'unknown' };
+  }
+  const row = object(result);
+  const id = integer(row?.id);
+  if (!row || !id) return { state: 'unknown' };
+  const url = 'https://github.com/' + repo + '/issues/' + input.number + '#issuecomment-' + id;
+  await comments.finish(input.key, url);
+  return { state: 'sent', url };
+}
+
 function only(input: Row, allowed: string[]): void {
   if (Object.keys(input).some(key => !allowed.includes(key))) throw new GhError('bad_response');
 }
@@ -259,9 +350,11 @@ function pageOf(value: unknown): number {
  * channel passes (params, emit) and no cancellation signal, so each read runs under a signal
  * that never aborts and is bounded only by the command's own timeout.
  */
-export function createGithubNode(options: { run?: GhRun } = {}) {
+export function createGithubNode(options: { run?: GhRun; dataDir?: string } = {}) {
   const run = options.run ?? runGh;
   const uncancelled = new AbortController().signal;
+  // Writing is offered only when the machine has somewhere to remember which comments went out.
+  const comments = options.dataDir ? createGithubCommentStore(options.dataDir) : undefined;
   // Checked against the machine channel signature at compile time.
   const handlers: Record<string, NodeHandler> = {
     'github.account': async params => reply(async () => {
@@ -306,6 +399,15 @@ export function createGithubNode(options: { run?: GhRun } = {}) {
       if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
       return ghChecks(run, uncancelled, input.repository, input.number);
     }),
+    ...(comments ? {
+      'github.comment': async (params: JsonObject) => reply(async () => {
+        const input = object(params) ?? {};
+        only(input, ['repository', 'number', 'body', 'key']);
+        if (typeof input.repository !== 'string' || typeof input.number !== 'number' || typeof input.body !== 'string' || typeof input.key !== 'string')
+          throw new GhError('bad_response');
+        return await ghComment(run, comments, uncancelled, { repository: input.repository, number: input.number, body: input.body, key: input.key });
+      }),
+    } : {}),
   };
   return handlers;
 }

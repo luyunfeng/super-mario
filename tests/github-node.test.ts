@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
-import { GhError, createGithubNode, ghAccount, ghChecks, ghComments, ghDiff, ghIssue, ghNotifications, ghSearch, repositoryOf, runGh, type GhRun } from '../plugins/github-node.ts';
+import { GhError, createGithubCommentStore, createGithubNode, ghAccount, ghChecks, ghComment, ghComments, ghDiff, ghIssue, ghNotifications, ghSearch, repositoryOf, runGh, type GhRun } from '../plugins/github-node.ts';
 
 const account = { login: 'octocat', name: 'The Octocat', id: 1, type: 'User' };
 const page = (items: unknown[]) => JSON.stringify(items);
@@ -186,6 +186,74 @@ test('搜索、差异和检查处理器拒绝未知参数与错误类型', async
     const result = await node[method]!(params as unknown as JsonObject, emit) as { ok: boolean };
     assert.equal(result.ok, false, method + ' ' + JSON.stringify(params));
   }
+});
+
+test('评论：请求体走标准输入，同一个键只发一次，重启后仍然记得', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-gh-comment-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const signal = new AbortController().signal;
+  const calls: { args: string[]; input?: string }[] = [];
+  let replies = 0;
+  const run: GhRun = async (args, options) => {
+    calls.push({ args, input: options.input });
+    if (args.includes('repos/o/r/issues/5/comments')) return JSON.stringify({ id: 900 + replies++ });
+    throw new Error('unexpected ' + args.join(' '));
+  };
+  const input = { repository: 'o/r', number: 5, body: '已看过首屏的请求，可以这样改。', key: 'approval:11111111-1114-4111-8111-111111111111:1' };
+  const first = await ghComment(run, createGithubCommentStore(dir), signal, input);
+  assert.deepEqual(first, { state: 'sent', url: 'https://github.com/o/r/issues/5#issuecomment-900' });
+  assert.deepEqual(calls[0]!.args, ['api', '--method', 'POST', 'repos/o/r/issues/5/comments', '--input', '-']);
+  assert.equal(calls[0]!.input, JSON.stringify({ body: input.body }));
+  assert.equal(calls[0]!.args.includes(input.body), false, 'the comment is not in the argument list');
+  // The same key is not posted again, in this process or after a restart.
+  assert.deepEqual(await ghComment(run, createGithubCommentStore(dir), signal, input), { state: 'already-sent', url: 'https://github.com/o/r/issues/5#issuecomment-900' });
+  assert.equal(calls.length, 1);
+  // A different key is a different comment.
+  assert.deepEqual(await ghComment(run, createGithubCommentStore(dir), signal, { ...input, key: 'approval:22222222-2224-4222-8222-222222222222:1' }),
+    { state: 'sent', url: 'https://github.com/o/r/issues/5#issuecomment-901' });
+  assert.equal(calls.length, 2);
+  const saved = JSON.parse(await readFile(join(dir, 'github-comments.json'), 'utf8'));
+  assert.equal(saved[input.key].state, 'sent');
+  assert.equal(/已看过首屏/.test(JSON.stringify(saved)), false, 'the comment text is not stored on the machine');
+});
+
+test('评论：请求已发出但 GitHub 的回答读不到时报告结果未知，不重发', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-gh-comment-unknown-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const signal = new AbortController().signal;
+  let calls = 0;
+  const run: GhRun = async () => { calls++; return 'not json'; };
+  const store = createGithubCommentStore(dir);
+  const input = { repository: 'o/r', number: 5, body: '一条评论', key: 'approval:33333333-3334-4333-8333-333333333333:1' };
+  assert.deepEqual(await ghComment(run, store, signal, input), { state: 'unknown' });
+  assert.deepEqual(await ghComment(run, store, signal, input), { state: 'unknown' });
+  assert.equal(calls, 1, 'a comment whose outcome is unknown is never posted twice');
+  // A refused request, before anything is sent, leaves the key unused so it can be retried.
+  const refused = createGithubCommentStore(dir);
+  await assert.rejects(ghComment(async () => { throw new GhError('forbidden'); }, refused, signal,
+    { repository: 'o/r', number: 5, body: '另一条', key: 'approval:44444444-4444-4444-8444-444444444444:1' }), isGhError('forbidden'));
+  assert.equal(await refused.outcome('approval:44444444-4444-4444-8444-444444444444:1'), undefined);
+});
+
+test('评论处理器只在执行机有数据目录时提供，并拒绝无效输入', async () => {
+  const readOnly = createGithubNode({ run: async () => '{}' });
+  assert.equal('github.comment' in readOnly, false, 'a machine without a data directory offers no write');
+  const dir = await mkdtemp(join(tmpdir(), 'mario-gh-comment-node-'));
+  const node = createGithubNode({ run: async () => JSON.stringify({ id: 1 }), dataDir: dir });
+  try {
+    assert.ok('github.comment' in node);
+    for (const params of [
+      { repository: '../x', number: 5, body: 'x', key: 'approval:55555555-5555-4555-8555-555555555555:1' },
+      { repository: 'o/r', number: 5, body: '', key: 'approval:55555555-5555-4555-8555-555555555555:1' },
+      { repository: 'o/r', number: 5, body: 'x', key: 'short' },
+      { repository: 'o/r', number: 5, body: 'x', key: 'has spaces in it' },
+      { repository: 'o/r', number: 5, body: 'x', key: 'approval:55555555-5555-4555-8555-555555555555:1', extra: 1 },
+    ]) {
+      const result = await node['github.comment']!(params as unknown as JsonObject, emit) as { ok: boolean; reason?: string };
+      assert.equal(result.ok, false, JSON.stringify(params));
+      assert.equal(result.reason, 'bad_response');
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test('环境里的令牌不传给 gh，gh 只用主人登录的账号', async t => {

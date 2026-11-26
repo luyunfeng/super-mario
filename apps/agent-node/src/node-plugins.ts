@@ -132,7 +132,7 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
     // Reads through the gh login of this machine. Nothing here starts an AI coding agent.
     {
       id: 'github',
-      handlers: createGithubNode(),
+      handlers: createGithubNode({ dataDir }),
     },
   ]);
 }
