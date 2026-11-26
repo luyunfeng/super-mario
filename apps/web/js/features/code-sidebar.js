@@ -87,6 +87,37 @@ export function createCodeSidebar({ api, store, compose }) {
     h('p', { class: 'small muted' }, '把当前分支推到 GitHub 并开出 PR。推送前会形成审批，同意后才推送。'),
     Field({ label: '仓库', control: pullRepository }), Field({ label: '合并到哪个分支', control: pullBase }),
     Field({ label: '标题', control: pullTitle }), Field({ label: '说明', control: pullBody }), pullOpen, pullStatus);
+  // The preview: what a server on the bound computer is showing at a port. The server is started
+  // in a terminal; this reads its page. Closing only puts the panel away and stops nothing.
+  const previewPanel = h('section', { class: 'stack code-sidebar__preview', 'aria-label': '预览' });
+  const previewPort = Input({ 'aria-label': '端口', type: 'number', min: 1, max: 65535, value: '3000', placeholder: '3000' });
+  const previewPath = Input({ 'aria-label': '页面路径', value: '/', placeholder: '/' });
+  const previewStatus = h('p', { class: 'small muted', 'aria-live': 'polite' });
+  // A div and not a pre: the file's own content is the panel's one pre, and is found as that.
+  const previewPage = h('div', { class: 'code-sidebar__text', tabindex: 0, hidden: true });
+  let previewOpen = false;
+  const previewClose = Button({ label: '关闭预览', size: 'sm', onClick: () => {
+    previewOpen = false; previewPage.hidden = true; previewPage.textContent = '';
+    previewStatus.textContent = '预览已关闭。服务没有停，要停请到终端里停。';
+  } });
+  const previewRead = Button({ label: '打开预览', size: 'sm', kind: 'primary', onClick: async (event, button) => {
+    button.disabled = true; previewStatus.textContent = '正在读取这台电脑上的页面…';
+    try {
+      const value = await api.get(`/projects/${encodeURIComponent(projectId)}/preview?${new URLSearchParams({ port: previewPort.value, path: previewPath.value })}`);
+      previewOpen = true;
+      previewStatus.textContent = value.ok
+        ? `HTTP ${value.status} · ${value.type || '未知类型'} · ${value.ms} 毫秒 · 读取于 ${new Date(value.at).toLocaleTimeString('zh-CN', { hour12: false })}`
+        : `没有打开：${value.error || ('HTTP ' + value.status)}`;
+      previewPage.textContent = value.text ?? '';
+      previewPage.hidden = !value.text;
+    } catch (error) {
+      previewStatus.textContent = `没有打开：${error.message}`;
+      previewPage.hidden = true;
+    } finally { button.disabled = false; }
+  } });
+  previewPanel.append(h('h3', null, '预览'), h('p', { class: 'small muted' }, '读取这台电脑上某个端口正在运行的服务。先在终端里启动它。'),
+    h('div', { class: 'form-row' }, Field({ label: '端口', control: previewPort }), Field({ label: '页面路径', control: previewPath })),
+    h('div', { class: 'row' }, previewRead, previewClose), previewStatus, previewPage);
   const edit = Button({ label: '编辑', size: 'sm', onClick: () => { if (editing) showEditor(); } });
   const save = Button({ label: '保存到电脑', size: 'sm', kind: 'primary', onClick: () => saveFile() });
   const undo = Button({ label: '撤销上次保存', size: 'sm', onClick: () => undoFile() });
@@ -108,7 +139,7 @@ export function createCodeSidebar({ api, store, compose }) {
   }
   const el = h('aside', { class: 'code-sidebar', 'aria-label': '项目代码', hidden: true },
     h('div', { class: 'row row--between' }, h('h2', null, '项目代码'), Button({ label: '关闭代码', size: 'sm', onClick: () => { el.hidden = true; opened = false; } })), title, body);
-  body.append(crumbs, tree, status, h('div', { class: 'row' }, fileBtn, diffBtn, edit), output, editor, gitPanel, pullPanel);
+  body.append(crumbs, tree, status, h('div', { class: 'row' }, fileBtn, diffBtn, edit), output, editor, gitPanel, pullPanel, previewPanel);
   const toggle = Button({ label: '查看代码', size: 'sm', onClick: () => { opened = !opened; el.hidden = !opened; if (opened) { void read('tree', ''); void readGit(); } } });
   syncModeButtons();
   function project() { return store.view.snapshot?.projects?.find(p => p.id === projectId); }

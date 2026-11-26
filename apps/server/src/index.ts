@@ -1303,6 +1303,23 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           }
           return json(res, 200, result);
         }
+        // What a server on the bound computer is showing, for the preview panel. The computer
+        // and the project are the binding; the page names only the port and the path.
+        const projectPreview = path.match(/^\/api\/v1\/projects\/([^/]+)\/preview$/);
+        if (projectPreview && method === 'GET') {
+          res.setHeader('cache-control', 'no-store');
+          const project = app.projects.list().find(p => p.id === decodeURIComponent(projectPreview[1]!));
+          if (!project || project.archivedAt) throw new InputError('项目不存在', 404);
+          if (!project.workspace) throw new InputError('项目尚未绑定电脑目录', 409);
+          const machine = machines.list().find(m => m.id === project.workspace!.machineId);
+          if (!machine?.online) throw new InputError('绑定电脑已离线', 503);
+          if (!machine.capabilities.includes('workspace.preview.read')) throw new InputError('请升级绑定电脑的代理以预览', 409);
+          for (const key of url.searchParams.keys()) if (key !== 'port' && key !== 'path') throw new InputError('预览只接受 port 和 path');
+          const port = Number(url.searchParams.get('port'));
+          if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new InputError('端口须为 1 至 65535 的整数');
+          const page = await machines.call(machine.id, 'workspace.preview.read', { port, path: url.searchParams.get('path') ?? '/' }, { timeoutMs: 15_000 });
+          return json(res, 200, page);
+        }
         // The Git state of a bound project, and the writes the page makes to it. The computer
         // and the directory are the project's binding, as for reading and writing files.
         const projectGit = path.match(/^\/api\/v1\/projects\/([^/]+)\/git$/);

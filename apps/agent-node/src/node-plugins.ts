@@ -10,6 +10,7 @@ import { createMachineStorageNode } from './machine-storage.ts';
 import { createWorkspaceWrite } from '../../../plugins/workspace-write.ts';
 import { createWorkspaceGitWrite } from '../../../plugins/workspace-git-write.ts';
 import { createWorkspacePullRequestNode } from '../../../plugins/workspace-pull-request.ts';
+import { createWorkspacePreviewNode } from './workspace-preview.ts';
 import { createMachineNetworkNode } from './machine-network.ts';
 import { createMachineResourcesNode } from './machine-resources.ts';
 import { createTerminalHost } from '../../../plugins/terminal-host.ts';
@@ -167,5 +168,8 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
     // Opening a pull request from a bound project: the branch is pushed and the pull request is
     // opened with the owner's own gh login. The owner approves it first.
     { id: 'workspace-pull-request', handlers: createWorkspacePullRequestNode().handlers },
+    // Reading what a server on this computer is showing, for the preview panel. The server is
+    // started in a terminal; this only reads its page from the loopback.
+    { id: 'workspace-preview', handlers: createWorkspacePreviewNode().handlers },
   ]);
 }
