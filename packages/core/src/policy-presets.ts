@@ -17,8 +17,16 @@ export function isHighRiskPolicyRule(rule: PolicyRule): boolean {
 }
 export function policyConfigDiff(current: PolicyConfig, next: PolicyConfig): PolicyDiff[] {
   const names: Record<keyof PolicyConfig, string> = { rules: '替换此范围的规则', escalateAfterMinutes: '每级等待分钟数', userDeadlineMinutes: '最终处理期限分钟数', ladder: '处理顺序', agentModes: 'Agent 自动处理方式' };
-  return (Object.keys(names) as (keyof PolicyConfig)[]).filter(field => JSON.stringify(current[field]) !== JSON.stringify(next[field]))
+  return (Object.keys(names) as (keyof PolicyConfig)[]).filter(field => field === 'rules' ? !sameRules(current.rules, next.rules ?? []) : JSON.stringify(current[field]) !== JSON.stringify(next[field]))
     .map(field => ({ field, before: structuredClone(current[field]), after: structuredClone(next[field]), description: names[field] }));
+}
+// When a preset is applied, the server dates each grant. That date is bookkeeping: it does
+// not change what a rule does. Compare rules by what they do, so a preset still counts as
+// the current one after it is applied, and the date is not shown as a difference.
+function sameRules(left: PolicyRule[] | undefined, right: PolicyRule[]) {
+  const behaviour = (rule: PolicyRule) => { const { grantedAt: _date, ...rest } = rule; return rest; };
+  const a = (left ?? []).map(behaviour), b = right.map(behaviour);
+  return a.length === b.length && a.every((rule, index) => JSON.stringify(rule) === JSON.stringify(b[index]));
 }
 function trustedDirectories(options: PresetOptions): string[] {
   return [...new Set((options.trustedDirectories ?? []).map(directory => {
@@ -56,7 +64,9 @@ export function applyPolicyPreset(current: PolicyConfig, preset: string, options
   validatePolicyPatch(selected.config);
   // The grant is dated when the owner applies it, not when the list was computed.
   const grantedAt = new Date(options.now ?? Date.now()).toISOString();
-  return structuredClone({ ...selected.config, rules: selected.config.rules.map(rule => ({ ...rule, note: rule.note ?? '主人应用自动处理预设', grantedAt })) });
+  // Only the preset's own wording is kept. A rule that needs a note already carries one;
+  // adding one to the others would make an applied preset differ from its own definition.
+  return structuredClone({ ...selected.config, rules: selected.config.rules.map(rule => ({ ...rule, grantedAt })) });
 }
 
 export interface PolicyHitCard { id: string; projectId?: string; ruleId?: string; answeredAt?: string; routingHistory?: { at: string; outcome: string }[] }

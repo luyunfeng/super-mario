@@ -2,6 +2,7 @@
 // 地址：#projects/<项目或 all>/<标签>/<执行编号>
 import { h, replace, keyedList } from '../lib/dom.js';
 import { Button, Tabs, Empty } from '../ui/kit.js';
+import { toast } from '../ui/overlay.js';
 import { Hint } from '../ui/hint.js';
 import { createProjectDiscoveryList } from '../features/project-discovery-list.js';
 import { openWorkspaceBoard, workspaceBoardEnabled } from '../features/workspace-board.js';
@@ -141,7 +142,11 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     if (!snapshot) return;
     const projects = (snapshot.projects ?? []).filter(item => !item.archivedAt);
     const known = projectId === 'all' || projects.some(item => item.id === projectId);
-    if (!known) { router.go(router.href('projects', 'all', 'todos')); return; }
+    if (!known) {
+      // A link to a project that is gone used to land on "all projects" without a word.
+      // An archived project is filtered out just above, so this is archived, deleted or a wrong address.
+      toast('找不到这个项目，它可能已归档或删除。已打开全部项目。');
+      router.go(router.href('projects', 'all', 'todos')); return; }
     paintList(snapshot);
     paintDetail(snapshot);
     if (tab === 'memory') paintMemory(snapshot);

@@ -110,3 +110,12 @@ test('放宽审批的规则必须带授权说明；预设写明理由和时间�
   assert.equal(rule.reversible, undefined, 'a preset does not claim that what it lets through can be undone');
   assert.doesNotThrow(() => validatePolicyPatch(applied));
 });
+
+test('应用预设后，该预设仍被认作当前预设', t => {
+  const policies = fixture(t);
+  for (const preset of ['conservative', 'balanced'] as const) {
+    const applied = applyPolicyPreset(policies.read(), preset);
+    const listed = policyPresets(applied).find(item => item.id === preset)!;
+    assert.deepEqual(listed.diff, [], preset + ' applied should show no difference from itself');
+  }
+});
