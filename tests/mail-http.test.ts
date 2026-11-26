@@ -7,6 +7,8 @@ import { startServer } from '../apps/server/src/index.ts';
 import { createMailReader } from '../packages/core/src/mail-reader.ts';
 import type { ImapClient, OpenImap } from '../packages/core/src/mail-imap.ts';
 import type { MailAccount } from '../packages/protocol/src/mail.ts';
+import { MAIL_SEND_APPROVAL } from '../packages/core/src/mail-outbox.ts';
+import { fakeMailServer } from './mail-fixture.ts';
 
 type Answer = { status: number; data: any };
 
@@ -43,7 +45,7 @@ async function start(t: test.TestContext, open: OpenImap = fakeOpen().open) {
     const response = await fetch(server.url + '/api/v1' + path, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: response.status, data: await response.json() as unknown };
   };
-  return { call };
+  return { call, server };
 }
 
 test('邮箱账号增改删查的整条流程，密码不出现在任何响应里', async t => {
@@ -138,4 +140,60 @@ test('读取一个账号：成功时带文件夹和最新邮件；失败时说�
   assert.equal(JSON.stringify(after).includes('Invalid login'), false, 'the server\'s own words are not passed on');
   // An account that is not there is a 404, not a mail failure.
   assert.equal((await f.call('POST', '/mail/accounts/no-such-account/read')).status, 404);
+});
+
+test('读一封邮件的正文和附件；太大、不存在、取消各自如实回答', async t => {
+  const server = fakeMailServer({ folders: [{ path: 'INBOX', messages: [
+    { uid: 4, raw: Buffer.from('From: a@example.invalid\r\nSubject: =?UTF-8?B?' + Buffer.from('周报').toString('base64') + '?=\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nthe body'), flags: new Set<string>() },
+    { uid: 5, raw: Buffer.from('From: a@example.invalid\r\nSubject: big\r\n\r\nx'), size: 11 * 1024 * 1024 },
+  ] }] });
+  const f = await start(t, async () => { throw new Error('reading the folders is not part of this test'); });
+  f.server.app.setMailOpen(async () => server.client);
+  const account = (await f.call('POST', '/mail/accounts', { email: 'someone@qq.com', password: 'the-secret-code' })).data as MailAccount;
+  const message = await f.call('GET', '/mail/accounts/' + account.id + '/messages/4');
+  assert.equal(message.status, 200, JSON.stringify(message.data));
+  assert.equal(message.data.subject, '周报');
+  assert.equal(message.data.text, 'the body\n');
+  assert.equal(message.data.seen, false);
+  assert.deepEqual(message.data.attachments, []);
+  assert.equal(JSON.stringify(message.data).includes('the-secret-code'), false);
+  // The folder is opened read-only, and only the message asked for is read.
+  assert.deepEqual(server.opened, [{ path: 'INBOX', readOnly: true }]);
+  assert.equal(server.fetched[0]!.range, '4');
+  // A message above the limit says so and is not cut short.
+  const big = await f.call('GET', '/mail/accounts/' + account.id + '/messages/5');
+  assert.equal(big.status, 422);
+  assert.match(big.data.error, /超过了一次读取的上限/);
+  // A message that is not there, a bad number, a bad folder name and an unknown parameter.
+  assert.equal((await f.call('GET', '/mail/accounts/' + account.id + '/messages/9')).status, 404);
+  assert.equal((await f.call('GET', '/mail/accounts/' + account.id + '/messages/0')).status, 400);
+  assert.equal((await f.call('GET', '/mail/accounts/' + account.id + '/messages/4?mailbox=%0A')).status, 400);
+  assert.equal((await f.call('GET', '/mail/accounts/' + account.id + '/messages/4?extra=1')).status, 400);
+  assert.equal((await f.call('GET', '/mail/accounts/no-such/messages/4')).status, 404);
+  // Another folder is named in the query.
+  const other = await f.call('GET', '/mail/accounts/' + account.id + '/messages/4?mailbox=INBOX');
+  assert.equal(other.status, 200);
+});
+
+test('页面提出发邮件只创建审批，批准前什么都没发', async t => {
+  const f = await start(t);
+  const account = (await f.call('POST', '/mail/accounts', { email: 'someone@qq.com', password: 'the-secret-code' })).data as MailAccount;
+  const asked = await f.call('POST', '/mail/send', { account: account.id, to: [{ name: '李四', email: 'lisi@example.invalid' }],
+    bcc: [{ email: 'boss@example.invalid' }], subject: '周四的评审', text: '请确认周四的评审。' });
+  assert.equal(asked.status, 201, JSON.stringify(asked.data));
+  assert.equal(asked.data.kind, MAIL_SEND_APPROVAL);
+  assert.equal(asked.data.status, 'pending');
+  assert.match(asked.data.details, /密送：boss@example\.invalid/);
+  assert.equal(JSON.stringify(asked.data).includes('the-secret-code'), false);
+  // The message is not sent by asking for it. Only one approval exists and it is pending.
+  assert.deepEqual(f.server.app.approvals.list().map(item => item.status), ['pending']);
+  // A request that is not a well-formed send is refused before an approval is made.
+  const bad = await f.call('POST', '/mail/send', { account: account.id, to: [], subject: 's', text: 't' });
+  assert.equal(bad.status, 400);
+  assert.match(bad.data.error, /发给谁/);
+  const unknownField = await f.call('POST', '/mail/send', { account: account.id, to: [{ email: 'a@example.invalid' }], subject: 's', text: 't', extra: 1 });
+  assert.equal(unknownField.status, 400);
+  const noAccount = await f.call('POST', '/mail/send', { account: 'no-such', to: [{ email: 'a@example.invalid' }], subject: 's', text: 't' });
+  assert.equal(noAccount.status, 404);
+  assert.equal(f.server.app.approvals.list().length, 1, 'a refused request makes no approval');
 });

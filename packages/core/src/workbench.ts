@@ -48,6 +48,9 @@ import { createTranscription, transcriptionEngine } from './transcription.ts';
 import { createSealedStore } from './sealed-store.ts';
 import { createMailAccounts } from './mail-accounts.ts';
 import { createMailReader } from './mail-reader.ts';
+import { executeMailSend, MAIL_SEND_APPROVAL, proposeMailSend } from './mail-outbox.ts';
+import { classifyImapError, connectionOptions, ImapError, libraryOpen, type OpenImap } from './mail-imap.ts';
+import { MessageError, readMessage } from './mail-message.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -628,7 +631,33 @@ export async function createWorkbench(config: AppConfig) {
   // connection and does not keep it.
   const sealed = await createSealedStore(config.dataDir);
   const mailAccounts = createMailAccounts({ store, sealed });
-  const mailReader = createMailReader({ accounts: mailAccounts });
+  // Reading and keeping a copy both connect to the account's mail server. The one way
+  // they connect is kept here, so that both use the same.
+  let mailOpen: OpenImap = libraryOpen();
+  const mailReader = createMailReader({ accounts: mailAccounts, open: options => mailOpen(options) });
+  // An email the assistant asks to send is an approval. Nothing goes out until the owner
+  // approves it, and what goes out is read back from the approval when they do.
+  function proposeMail(input: Record<string, unknown>) {
+    return proposeMailSend(input, mailAccounts, input => approvals.propose(input));
+  }
+  /** Reads one message in full. The password is taken out for the connection and is not
+   *  kept. Reading does not mark the message as read. */
+  async function readMail(accountId: string, uid: number, mailbox: string, signal: AbortSignal) {
+    const account = mailAccounts.get(accountId);
+    const password = await mailAccounts.password(accountId);
+    if (password === undefined) throw new ImapError('authentication', '这个账号还没有密码，请重新填写。');
+    let client;
+    try {
+      client = await mailOpen(connectionOptions(account, password));
+      const read = await readMessage(client, { account: account.id, mailbox, uid }, signal);
+      // The contents are for saving an attachment, which the page asks for on its own.
+      // They are not part of what a read returns.
+      return read.message;
+    } catch (error) {
+      if (signal.aborted || error instanceof MessageError || error instanceof ImapError) throw error;
+      throw classifyImapError(error);
+    } finally { await client?.logout().catch(() => {}); }
+  }
   /** Reads the audio of one transcription from a request. The body is already PCM16 mono
    *  16 kHz, which the owner's browser made from what it recorded, so no audio library runs
    *  on the server and the audio is never kept. */
@@ -1916,6 +1945,11 @@ export async function createWorkbench(config: AppConfig) {
     if (approval.kind === knowledgeSourceApprovalKind) { knowledgeSourceApproval.approve(approval); return {jobId:approval.params.jobId,queued:true}; }
     if (approval.kind === scheduledWorkApprovalKind) return scheduledWork.approveCreation(approval);
     if (approval.kind === GITHUB_COMMENT_APPROVAL) return githubExecuteComment(approval);
+    // Before the general plugin acknowledgement below: a mail approval carries a message
+    // that is to be sent, and is not answered by an acknowledgement alone.
+    // Nobody stops an approved send from outside: the owner approved it, and it ends by its
+    // own result. The send has its own limit on how long it takes.
+    if (approval.kind === MAIL_SEND_APPROVAL) return await executeMailSend(approval, mailAccounts, new AbortController().signal, options => mailOpen(options)) as unknown as Json;
     if (approval.kind.startsWith('plugin:')) return {accepted:true,kind:approval.kind};
     if (approval.kind === 'dispatch') {
       const params: JsonObject = { ...approval.params, ...(approval.todoId ? { todoId: approval.todoId } : {}) };
@@ -3467,7 +3501,8 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, proposeMail, MAIL_SEND_APPROVAL,
+    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

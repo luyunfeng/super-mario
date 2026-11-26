@@ -563,6 +563,34 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
               failure ? 502 : error && typeof error === 'object' && 'status' in error ? Number(error.status) : 500);
           }
         }
+        // Reading one message in full. The folder is named because a message is in one, and
+        // the inbox is meant when none is named.
+        const mailMessage = path.match(/^\/api\/v1\/mail\/accounts\/([^/]+)\/messages\/(\d+)$/);
+        if (mailMessage && method === 'GET') {
+          const mailbox = url.searchParams.get('mailbox') ?? 'INBOX';
+          if (url.searchParams.size > Number(url.searchParams.has('mailbox'))) throw new InputError('只接受 mailbox 参数');
+          if (!mailbox || mailbox.length > 512 || /[\u0000-\u001f\u007f]/.test(mailbox)) throw new InputError('文件夹名称无效');
+          const uid = Number(mailMessage[2]);
+          if (!Number.isSafeInteger(uid) || uid < 1) throw new InputError('邮件编号无效');
+          const controller = new AbortController();
+          res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+          try { return json(res, 200, await app.readMail(decodeURIComponent(mailMessage[1]!), uid, mailbox, controller.signal)); }
+          catch (error) {
+            if (controller.signal.aborted) return;
+            // A message that is gone, too large or unreadable is said so by its kind. Each is
+            // one the page can show as it is.
+            const kind = error && typeof error === 'object' && 'failure' in error ? String(error.failure) : '';
+            const status = kind === 'not-found' ? 404 : kind === 'too-large' || kind === 'unreadable' ? 422
+              : error && typeof error === 'object' && 'status' in error ? Number(error.status) : kind ? 502 : 500;
+            throw new InputError(error instanceof Error ? error.message : '读取邮件失败', status);
+          }
+        }
+        // An email the assistant or the page wants to send. This only asks for it: the
+        // message goes out after the owner approves it.
+        if (path === '/api/v1/mail/send' && method === 'POST') {
+          try { return json(res, 201, app.proposeMail(await body(req))); }
+          catch (error) { throw mailError(error); }
+        }
         if (path === '/api/v1/transcription' && method === 'GET') return json(res, 200, app.transcription.status());
         if (path === '/api/v1/transcription/choice' && method === 'PUT') {
           const input = await body(req);
