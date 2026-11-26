@@ -48,7 +48,9 @@ test('主对话和项目发件卡按原请求恢复，保留新草稿，移除�
     };
     const oldText=label+'需要补发的旧消息',newText=label+'后写的新草稿';
     if(!isProject){
-      await page.getByLabel('选择文件').setInputFiles({name:'旧消息资料.txt',mimeType:'text/plain',buffer:Buffer.from('原发件合成附件')});
+      // The main conversation's own file input. An independent conversation on the same page
+      // has another one with the same label.
+      await page.locator('#message-form').getByLabel('选择文件').setInputFiles({name:'旧消息资料.txt',mimeType:'text/plain',buffer:Buffer.from('原发件合成附件')});
       await expect(page.getByText('已上传',{exact:true})).toBeVisible();
     }
     const oldKey=await tryFault(oldText,false);

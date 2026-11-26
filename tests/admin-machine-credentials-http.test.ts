@@ -8,6 +8,18 @@ import WebSocket from 'ws';
 import type {Run} from '../packages/protocol/src/index.ts';
 import {startServer} from '../apps/server/src/index.ts';
 
+/** The overview with its build taken out, after checking what the build says. The build is
+ *  the server's own and differs from one run to the next, so it is not compared as a whole. */
+function withoutBuild<T extends { build?: unknown }>(overview: T): T {
+  const build = overview.build as { commit: string; builtAt: string; dirty?: boolean } | undefined;
+  assert.ok(build, 'the overview names the build the server runs');
+  assert.match(build.commit, /^(?:unknown|[0-9a-f]{40})$/);
+  assert.equal(Number.isNaN(Date.parse(build.builtAt)), false);
+  assert.equal(build.dirty === undefined || typeof build.dirty === 'boolean', true);
+  const { build: _build, ...rest } = overview;
+  return rest as T;
+}
+
 test('管理员签发单机凭据，执行机身份受限且撤销立即断开现有连接',{timeout:20000},async t=>{
   const dataDir=await mkdtemp(join(tmpdir(),'machine-credential-http-')),root='synthetic-credential-root';
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,token:root,demo:true});
@@ -76,7 +88,9 @@ test('管理员签发单机凭据，执行机身份受限且撤销立即断开�
     prompt:'合成任务',status:'completed',output:'已有结果',createdAt:at,updatedAt:at};
   server.app.store.put('runs',history.id,history);
   const removed=await post('machines/remove',{id},admin);assert.equal(removed.status,200);
-  assert.deepEqual(await removed.json(),{machines:[]});
+  // Removing answers with the overview, which names the server's build. The list of
+  // credentials read after it is only that list.
+  assert.deepEqual(withoutBuild(await removed.json()),{machines:[]});
   assert.deepEqual(await(await fetch(endpoint,{headers:{cookie}})).json(),{machines:[]});
   await assert.rejects(once(socket('/node',replacementToken),'open'),/401|403/);
   const snapshot=await(await fetch(api+'/state',{headers:bearer(root)})).json();

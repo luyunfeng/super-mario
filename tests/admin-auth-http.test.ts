@@ -8,6 +8,18 @@ import {tmpdir} from 'node:os';
 import test from 'node:test';
 import {startServer} from '../apps/server/src/index.ts';
 
+/** The overview with its build taken out, after checking what the build says. The build is
+ *  the server's own and differs from one run to the next, so it is not compared as a whole. */
+function withoutBuild<T extends { build?: unknown }>(overview: T): T {
+  const build = overview.build as { commit: string; builtAt: string; dirty?: boolean } | undefined;
+  assert.ok(build, 'the overview names the build the server runs');
+  assert.match(build.commit, /^(?:unknown|[0-9a-f]{40})$/);
+  assert.equal(Number.isNaN(Date.parse(build.builtAt)), false);
+  assert.equal(build.dirty === undefined || typeof build.dirty === 'boolean', true);
+  const { build: _build, ...rest } = overview;
+  return rest as T;
+}
+
 test('独立管理入口仅本机可申请初始化码；Cookie、来源和 CSRF 共同保护后续操作',async t=>{
   const dataDir=await mkdtemp(join(tmpdir(),'admin-auth-http-')),root='synthetic-root';
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,token:root,demo:true});
@@ -53,7 +65,7 @@ test('独立管理入口仅本机可申请初始化码；Cookie、来源和 CSRF
   assert.equal((await send('machines/name',machine,{cookie})).status,403);
   assert.equal((await send('machines/name',machine,{...machineEdit,origin:'https://cross.invalid'})).status,403);
   assert.equal((await send('machines/name',machine,machineEdit)).status,404);
-  assert.deepEqual(await (await send('machines',undefined,{cookie})).json(),{machines:[]});
+  assert.deepEqual(withoutBuild(await (await send('machines',undefined,{cookie})).json()),{machines:[]});
   const peer=new WebSocket(server.url.replace('http:','ws:')+'/api/v1/node',{headers:bearer});
   await once(peer,'open');
   peer.send(JSON.stringify({type:'hello',machineId:'fixture-admin-machine',name:'合成执行机',platform:'linux',capabilities:[]}));

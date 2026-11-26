@@ -84,7 +84,14 @@ test('hello, welcome, heartbeat and read-only status use the shared wire protoco
   assert.deepEqual(hello, {
     type: 'hello', agentInstanceId: (hello as Extract<NodeMessage,{type:'hello'}>).agentInstanceId, machineId: f.options.machineId, name: f.options.name,
     platform: process.platform, capabilities: ['node.status'],
+    // Which build the machine runs, so that the owner can tell whether it is the one they
+    // think. The commit is the one the build was made from, or "unknown"; dirty says the
+    // build was made with uncommitted changes.
+    build: (hello as Extract<NodeMessage,{type:'hello'}>).build,
   });
+  const build = (hello as Extract<NodeMessage,{type:'hello'}>).build!;
+  assert.match(build.commit, /^(?:unknown|[0-9a-f]{40})$/);
+  assert.equal(build.dirty === undefined || typeof build.dirty === 'boolean', true);
   assert.match((hello as Extract<NodeMessage,{type:'hello'}>).agentInstanceId!, /^[a-f0-9-]{36}$/);
   const url = new URL(peer.url, f.options.url);
   assert.equal(url.pathname, '/api/v1/node');
