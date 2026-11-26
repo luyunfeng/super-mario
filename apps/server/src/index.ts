@@ -9,6 +9,8 @@ import { readWebThreadAssistant } from '../../../plugins/assistant-profile.ts';
 import {proofForBrowserToken} from '../../../plugins/browser-devices.ts';
 import {createBrowserAccess,pairingQR} from './browser-access.ts';
 import { buildInfo } from '../../../packages/core/src/build-info.ts';
+import { MachineError } from '../../../packages/core/src/machines.ts';
+import type { Json } from '../../../packages/protocol/src/index.ts';
 import { privateThreadPage, searchPrivateThreadHits, searchPrivateThreads } from './feishu-thread-history.ts';
 import { createSessionAnalysis } from './session-analysis.ts';
 import { nativeExportProgress } from '../../../packages/core/src/native-conversation-export.ts';
@@ -1263,6 +1265,34 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!machine.capabilities.includes('workspace.code')) throw new InputError('请升级绑定电脑的代理以浏览代码', 409);
           if (!['tree','file','diff'].includes(kind)) throw new InputError('浏览类型无效');
           return json(res, 200, await machines.call(machine.id, 'workspace.code', { cwd: project.workspace.cwd, kind, path: url.searchParams.get('path') ?? '' }));
+        }
+        // Writing one file of a bound project from the page, and undoing it. The computer is
+        // named by the project's binding; the page cannot say which computer to write to.
+        const codeFile = path.match(/^\/api\/v1\/projects\/([^/]+)\/code\/file(\/undo)?$/);
+        if (codeFile && ((codeFile[2] && method === 'POST') || (!codeFile[2] && method === 'PUT'))) {
+          res.setHeader('cache-control', 'no-store');
+          const project = app.projects.list().find(p => p.id === decodeURIComponent(codeFile[1]!));
+          if (!project || project.archivedAt) throw new InputError('项目不存在', 404);
+          if (!project.workspace) throw new InputError('项目尚未绑定电脑目录', 409);
+          const machine = machines.list().find(m => m.id === project.workspace!.machineId);
+          if (!machine?.online) throw new InputError('绑定电脑已离线', 503);
+          const methodWanted = codeFile[2] ? 'workspace.file.undo' : 'workspace.file.write';
+          if (!machine.capabilities.includes(methodWanted)) throw new InputError('请升级绑定电脑的代理以编辑文件', 409);
+          const input = await body(req, 512 * 1024) as Record<string, unknown>;
+          const allowed = codeFile[2] ? ['undoId', 'expected'] : ['path', 'text', 'expected'];
+          if (Object.keys(input).some(key => !allowed.includes(key))) throw new InputError('保存文件的参数无效');
+          // The undo of a write is a write of its own: it is recorded as one, so that a refusal or
+          // a fault on the way is known and the write is not made twice.
+          let result: Json;
+          try { result = await machines.call(machine.id, methodWanted, { cwd: project.workspace.cwd, ...input }, { timeoutMs: 15_000 }); }
+          catch (error) {
+            // A refusal the computer makes of the write itself (the file changed, the path is not
+            // an ordinary file, the undo is not this project's) is the owner's to read and to act
+            // on, not a fault of the computer. It is answered as a refusal, with the computer's words.
+            if (error instanceof MachineError && error.status === 502) throw new InputError(error.message, 409);
+            throw error;
+          }
+          return json(res, 200, result);
         }
         if(projectWorkspace){const id=decodeURIComponent(projectWorkspace[1]);
           if (projectWorkspace[2] === 'workspace' && method === 'GET') {

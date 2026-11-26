@@ -7,6 +7,7 @@ import { createProjectDiscovery } from '../../../plugins/project-discovery.ts';
 import { createGithubNode } from '../../../plugins/github-node.ts';
 import { createMailAttachmentNode } from './mail-attachment.ts';
 import { createMachineStorageNode } from './machine-storage.ts';
+import { createWorkspaceWrite } from '../../../plugins/workspace-write.ts';
 import { createMachineNetworkNode } from './machine-network.ts';
 import { createMachineResourcesNode } from './machine-resources.ts';
 import { createTerminalHost } from '../../../plugins/terminal-host.ts';
@@ -155,5 +156,8 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
     { id: 'machine-resources', handlers: createMachineResourcesNode().handlers },
     // What this machine is connected to and what it listens for. Nothing is sent to the internet.
     { id: 'machine-network', handlers: createMachineNetworkNode().handlers },
+    // Writing a file of a bound project from the page, and undoing it. What was replaced is kept
+    // under the agent's own data directory for the undo.
+    { id: 'workspace-write', handlers: createWorkspaceWrite({ dataDir }).handlers },
   ]);
 }

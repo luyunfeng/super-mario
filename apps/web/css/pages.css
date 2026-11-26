@@ -35,6 +35,8 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
   font-size: calc(12.5px * var(--reading-scale, 1)); line-height: 1.55; white-space: pre; overflow: auto; max-height: 58vh;
   padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
 }
+/* The editor under a file: a box and what was done with it. */
+.code-sidebar__edit textarea { font-family: var(--mono, monospace); font-size: calc(12px * var(--reading-scale, 1)); }
 .diff-line { display: inline-block; min-width: 100%; padding: 0 4px; border-radius: 2px; }
 .diff-line--add { background: #e6f7ed; color: #065f46; }
 .diff-line--del { background: #fdecec; color: #991b1b; }

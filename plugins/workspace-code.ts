@@ -1,4 +1,5 @@
 import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { open, realpath, stat, opendir, lstat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -164,6 +165,7 @@ export const workspaceCode: NodeHandler = async (params): Promise<Json> => {
   if (!info.isFile()) throw new Error('只允许读取普通文本文件');
   const handle = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   let text: string;
+  let hash: string;
   try {
     if (process.platform === 'linux') inside(root, await realpath(`/proc/self/fd/${handle.fd}`));
     const value = await handle.stat();
@@ -174,8 +176,11 @@ export const workspaceCode: NodeHandler = async (params): Promise<Json> => {
     const data = buffer.subarray(0, bytesRead);
     if (data.some(c => c < 32 && ![9,10,13].includes(c))) throw new Error('二进制文件不可浏览');
     try { text = new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { throw new Error('只支持 UTF-8 文本文件'); }
+    hash = createHash('sha256').update(data).digest('hex');
   } finally { await handle.close(); }
-  if (params.kind === 'file') return { root, path, text };
+  // The hash of the bytes as read, so that a write can say what it read and be refused if the
+  // file changed on the computer in between.
+  if (params.kind === 'file') return { root, path, text, hash };
   if (params.kind !== 'diff') throw new Error('浏览类型无效');
   // Git never walks to a parent repository or follows user-configured diff programs.
   const env = { PATH: process.env.PATH, LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
