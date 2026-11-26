@@ -13,6 +13,7 @@ import { Banner, Button, Card, Empty, Input, Pill, Select } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
 import { openDrawer } from '../ui/overlay.js';
 import { githubInboxBody, githubOriginalLink } from '../features/github-inbox.js';
+import { mailInboxBody } from '../features/mail-inbox.js';
 import { openInboxHandlingDrawer } from '../features/inbox-handling.js';
 
 const MAIL = { pending: '待确认', ready: '等待处理', processing: '处理中', rejected: '已拒绝', failed: '处理失败', unknown: '结果未知' };
@@ -29,7 +30,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   let snapshot = store.view.snapshot;
   let mailbox = [], deliveries = [];
   let error = '', loadError = '', loaded = false, loading = false, revision = 0, lastSnapshot;
-  let filePreview,reactions,pins,editHistory,historyChange,historyScope,relations, githubBody, drawer, selected, detailKey, detailTranslation, mailboxOwner;
+  let filePreview,reactions,pins,editHistory,historyChange,historyScope,relations, githubBody, mailBody, drawer, selected, detailKey, detailTranslation, mailboxOwner;
   const translation = incoming ? createInboxTranslation({ api, store,
     isSelected: id => drawer?.el.open && router.current.page === direction && selected === id }) : null;
   let sourceFilter = 'all', stageFilter = 'all';
@@ -408,6 +409,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     editHistory?.close();
     filePreview?.close();
     githubBody = undefined;
+    mailBody = undefined;
     reactions = pins = editHistory = filePreview = historyScope = undefined;
   }
   function detail() {
@@ -424,6 +426,8 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       filePreview=incoming && item.kind==='personal' ? inboxFilePreview(api,store,raw) : undefined;
       // The GitHub body is read once per item. Unrelated redraws of the detail must not read it again.
       githubBody=incoming && raw.origin?.github ? githubInboxBody(api, raw) : undefined;
+      // The mail body is read once per item in the same way.
+      mailBody=incoming && raw.origin?.mail ? mailInboxBody(api, raw) : undefined;
       historyScope=historyKey;historyChange=view.feishuEditHistoryChange;detailKey=undefined;
     }
     const showRelations = incoming && item.kind === 'personal' && snapshot?.plugins?.some(plugin => plugin.id === 'inbox-triage' && plugin.status === 'active');
@@ -445,6 +449,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       incoming && metadata(item),
       originalMessageLink(item),
       githubBody?.el,
+      mailBody?.el,
       !incoming && raw.sender && h('p', { class: 'small mailbox-meta' }, `最近发言人：${raw.sender}`),
       raw.target && h('p', { class: 'small mailbox-meta' }, `发送目标：${raw.target}`),
       raw.reason && h('p', { class: 'small muted' }, `分拣建议：${raw.reason.replace(/^注入分拣器：/, '')}`),

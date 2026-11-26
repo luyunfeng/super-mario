@@ -1206,6 +1206,17 @@ export async function createWorkbench(config: AppConfig) {
     // thing. The account is part of the thread, so two accounts' mail is never mixed.
     await inbox.ingest('mail', things);
   }
+  /** The email an inbox item points at, read in full. The page knows only the item, so the
+   *  mailbox and the message are taken from the item and not from the request. */
+  async function readInboxMail(id: string, signal: AbortSignal) {
+    const item = inbox.list().find(entry => entry.id === id);
+    const target = item?.origin?.mail;
+    if (!item || !target) throw new InputError('这条收件不是邮件', 404);
+    // A mailbox the owner has removed can no longer be read. Its items are closed when it is
+    // removed, so this is only reached from an old page.
+    if (!mailAccounts.list().some(account => account.id === target.account)) throw new InputError('这封邮件所在的邮箱已移除', 404);
+    return readMail(target.account, target.uid, target.mailbox, signal);
+  }
   function mailConnectorView() {
     const state = mailConnectorState();
     return { enabled: state.enabled, folders: state.folders ?? [], lastRunAt: state.lastRunAt, lastError: state.lastError,
@@ -3614,7 +3625,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, searchMail, mailTool, proposeMail, MAIL_SEND_APPROVAL,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, searchMail, mailTool, proposeMail, MAIL_SEND_APPROVAL,
     mailConnectorView, mailConnectorConfigure, mailPoll: async () => { await plugins.invocations.use(MAIL_POLL_SERVICE, {}); },
     mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },

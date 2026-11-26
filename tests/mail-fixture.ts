@@ -44,10 +44,48 @@ export type FakeServer = {
   logouts: () => number;
 };
 
+/** One header of a message as text, with a folded line joined and an encoded word read.
+ *  Only what a list shows is read here. The message itself is parsed in full elsewhere. */
+function headerOf(raw: Uint8Array, name: string): string {
+  const text = new TextDecoder().decode(raw);
+  const head = text.split(/\r\n\r\n/)[0] ?? text;
+  const lines = head.split(/\r\n/);
+  const value: string[] = [];
+  for (const line of lines) {
+    if (value.length) {
+      // A header that is too long for one line continues on the next, which starts with space.
+      if (/^[ \t]/.test(line)) { value.push(line.trim()); continue; }
+      break;
+    }
+    if (new RegExp('^' + name + ':', 'i').test(line)) value.push(line.replace(new RegExp('^' + name + ':\\s*', 'i'), ''));
+  }
+  if (!value.length) return '';
+  return value.join(' ').replace(/=\?UTF-8\?B\?([^?]+)\?=/gi, (_, code: string) => Buffer.from(code, 'base64').toString('utf8')).trim();
+}
+
+/** The envelope of a message given only as raw, as a real server reads it from the headers.
+ *  A message that has one of its own keeps it. */
+function envelopeOf(message: FakeMessage): Record<string, unknown> | undefined {
+  if (message.envelope) return message.envelope;
+  if (!message.raw) return undefined;
+  const address = (value: string) => {
+    const match = /^(.*?)<?([^<>\s]+@[^<>\s]+)>?$/.exec(value.trim());
+    return match ? { name: match[1]!.replace(/^"|"$/g, '').trim(), address: match[2]! } : { name: '', address: value.trim() };
+  };
+  const list = (value: string) => value.split(',').map(item => item.trim()).filter(Boolean).map(address);
+  return {
+    subject: headerOf(message.raw, 'Subject'),
+    messageId: headerOf(message.raw, 'Message-ID').replace(/^<|>$/g, ''),
+    from: list(headerOf(message.raw, 'From')), to: list(headerOf(message.raw, 'To')), date: headerOf(message.raw, 'Date'),
+  };
+}
+
 export function fakeMailServer(options: FakeServerOptions): FakeServer {
   const opened: FakeServer['opened'] = [];
   const fetched: FakeServer['fetched'] = [];
   const searches: FakeServer['searches'] = [];
+  // Envelopes are read before any answer is given, so that answering stays synchronous.
+  for (const folder of options.folders) for (const message of folder.messages) message.envelope = envelopeOf(message);
   const downloaded: FakeServer['downloaded'] = [];
   const appended: FakeServer['appended'] = [];
   let logouts = 0;

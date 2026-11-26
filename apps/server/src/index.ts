@@ -587,6 +587,22 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw new InputError(error instanceof Error ? error.message : '读取邮件失败', status);
           }
         }
+        // The email an inbox item points at. The page sends the item it has, and the mailbox
+        // and the message come from the item.
+        const inboxMail = path.match(/^\/api\/v1\/mail\/inbox\/([^/]+)$/);
+        if (inboxMail && method === 'GET') {
+          if (url.searchParams.size) throw new InputError('这条接口不接受参数');
+          const controller = new AbortController();
+          res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+          try { return json(res, 200, await app.readInboxMail(decodeURIComponent(inboxMail[1]!), controller.signal)); }
+          catch (error) {
+            if (controller.signal.aborted) return;
+            const kind = error && typeof error === 'object' && 'failure' in error ? String(error.failure) : '';
+            const status = kind === 'not-found' ? 404 : kind === 'too-large' || kind === 'unreadable' ? 422
+              : error && typeof error === 'object' && 'status' in error ? Number(error.status) : kind ? 502 : 500;
+            throw new InputError(error instanceof Error ? error.message : '读取邮件失败', status);
+          }
+        }
         // An email the assistant or the page wants to send. This only asks for it: the
         // message goes out after the owner approves it.
         if (path === '/api/v1/mail/send' && method === 'POST') {
