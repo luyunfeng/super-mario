@@ -1,4 +1,31 @@
 import type { MailAccount, Mailbox, MailSummary } from '../../protocol/src/mail.ts';
+import type { ImapFlowOptions } from 'imapflow';
+
+/** How a connection is opened. Kept separate from the library so the read can be tested
+ *  without a server, and so the options are built in one place. */
+export type OpenImap = (options: ImapFlowOptions) => Promise<ImapClient>;
+
+/** Opens a connection with the mail library. The password is used here and not kept. */
+export function libraryOpen(): OpenImap {
+  return async options => {
+    const { ImapFlow } = await import('imapflow');
+    const client = new ImapFlow({ ...options, logger: false });
+    // The library logs every command and response by default, which would put addresses and
+    // server greetings in the workbench's output. That is turned off above.
+    await client.connect();
+    return client as unknown as ImapClient;
+  };
+}
+
+/** The options for one account's connection. The password is passed in and not stored. */
+export function connectionOptions(account: MailAccount, password: string): ImapFlowOptions {
+  return {
+    ...transport(account),
+    auth: { user: account.username, pass: password },
+    // The workbench reads when the owner asks, so it does not hold an idle connection open.
+    disableAutoIdle: true,
+  };
+}
 
 /** Why a sign-in or a read did not work, in terms the owner can act on. */
 export type MailFailure = 'authentication' | 'connection' | 'tls' | 'not-found' | 'refused' | 'timeout' | 'too-many' | 'unknown';
