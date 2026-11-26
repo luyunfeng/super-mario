@@ -496,6 +496,24 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method === 'POST') return json(res,200,await gateway.commandGroup.sync(await body(req)));
         }
         if (path === '/api/v1/github/connector' && method === 'GET') return json(res, 200, app.githubView());
+        if (path === '/api/v1/transcription' && method === 'GET') return json(res, 200, app.transcription.status());
+        if (path === '/api/v1/transcription/choice' && method === 'PUT') {
+          const input = await body(req);
+          if (Object.keys(input).some(key => key !== 'service')) throw new InputError('转写引擎参数无效');
+          if (input.service !== undefined && typeof input.service !== 'string') throw new InputError('转写引擎参数无效');
+          app.transcription.choose(input.service ?? '');
+          return json(res, 200, app.transcription.status());
+        }
+        if (path === '/api/v1/transcription/jobs' && method === 'POST') {
+          // The body is the audio itself, already PCM16 mono 16 kHz. The request is aborted
+          // when the client goes away, so a long recording is not transcribed for nobody.
+          const controller = new AbortController();
+          res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+          const language = url.searchParams.get('language') ?? undefined;
+          const label = url.searchParams.get('label') ?? undefined;
+          if (url.searchParams.size > Number(language !== undefined) + Number(label !== undefined)) throw new InputError('只接受 language 和 label 参数');
+          return json(res, 200, await app.transcribeUpload(req, { ...(language ? { language } : {}), ...(label ? { label } : {}) }, controller.signal));
+        }
         if (path === '/api/v1/github/connector' && method === 'PUT') {
           const view = app.githubConfigure(await body(req));
           // Saving turns the connector on. Reading at once tells the owner which account it

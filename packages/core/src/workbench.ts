@@ -44,6 +44,7 @@ import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
 import { createProjectLessonLearner } from './project-lesson-learner.ts';
 import { createGithubConnector, DEFAULT_IGNORED_BRANCHES, type GithubConnectorState } from '../../../plugins/github-connector.ts';
+import { createTranscription, transcriptionEngine } from './transcription.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -92,7 +93,7 @@ import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
 import { runCitation, eraseWebConversationRegistration, webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, createBrowserDevices, createUsageSources, type UsageWindowCache, type UsageInventoryPage, type UsageInventoryReader, feishuMessageReactionsExtension, type FeishuReactionReader, feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, browserNotifications, readingFonts, assistantCardExamples, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, createAssistantProfile, requireRosterAssistant, readWebThreadAssistant, projectInstructions, createConversationSharing, createWorkspaceBoard, createSavedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
-import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
+import { commitChanges, executionUsage, TRANSCRIPTION_AUDIO, TRANSCRIPTION_MAX_SECONDS } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
@@ -605,6 +606,39 @@ export async function createWorkbench(config: AppConfig) {
     },
   });
   plugins.register(githubConnector);
+  // Transcription engines are contributions: a connector entry that names a service a plugin
+  // really provides. The workbench holds no speech model and no key. It hands audio to the
+  // engine the owner chose and reads what comes back.
+  const transcription = createTranscription({
+    store, engines: () => contributions.list('connectors').flatMap(({ value }) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const engine = transcriptionEngine(value);
+      // An engine is listed only when its service is provided and read-only, the way a
+      // subscription source is. A connector entry alone does not make an engine exist.
+      return engine && contributions.list('services').some(entry => entry.value.name === engine.service && entry.value.readOnly === true)
+        ? [engine] : [];
+    }),
+    call: (service, input, signal) => plugins.invocations.use(service, input, { signal }) as Promise<Json>,
+  });
+  /** Reads the audio of one transcription from a request. The body is already PCM16 mono
+   *  16 kHz, which the owner's browser made from what it recorded, so no audio library runs
+   *  on the server and the audio is never kept. */
+  async function transcribeUpload(source: AsyncIterable<Uint8Array>, options: { language?: string; label?: string }, signal: AbortSignal) {
+    const state = transcription.status();
+    if (state.reason) throw new InputError(state.reason, 409);
+    const limit = TRANSCRIPTION_MAX_SECONDS * TRANSCRIPTION_AUDIO.sampleRate * 2;
+    const parts: Uint8Array[] = [];
+    let bytes = 0;
+    for await (const chunk of source) {
+      signal.throwIfAborted();
+      bytes += chunk.byteLength;
+      if (bytes > limit) throw new InputError('一段音频最多十五分钟，请分段转写。', 413);
+      parts.push(chunk);
+    }
+    const audio = new Uint8Array(bytes);
+    for (let at = 0, index = 0; index < parts.length; index++) { audio.set(parts[index]!, at); at += parts[index]!.byteLength; }
+    return transcription.transcribe({ audio, ...options }, signal);
+  }
   function githubView() {
     const { machineId, enabled, login, epoch, lastRunAt, lastError, ciMode, mutedRepositories, ignoredBranches } = githubState();
     const machinesNow = machines?.list() ?? [];
@@ -3424,7 +3458,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

@@ -47,7 +47,14 @@ export type TranscriptionProblem = 'unavailable' | 'not_configured' | 'invalid_a
 
 export class TranscriptionError extends Error {
   readonly problem: TranscriptionProblem;
-  constructor(problem: TranscriptionProblem, message: string) { super(message); this.name = 'TranscriptionError'; this.problem = problem; }
+  readonly status: number;
+  constructor(problem: TranscriptionProblem, message: string) {
+    super(message);
+    this.name = 'TranscriptionError';
+    this.problem = problem;
+    // Each problem is one answer a client can act on: nothing to use, wrong input, or a failure.
+    this.status = problem === 'invalid_audio' ? 400 : problem === 'too_long' ? 413 : problem === 'failed' ? 502 : 409;
+  }
 }
 
 /** The owner's choice among the engines that are installed. */

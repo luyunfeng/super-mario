@@ -158,3 +158,27 @@ test('引擎清单只认合法的条目，同一个服务被报两次时取第�
   assert.equal(transcriptionSeconds(bytesPerSecond * 3), 3);
   assert.equal(transcriptionSeconds(bytesPerSecond + 2), 1 + 1 / 16000);
 });
+
+test('选定的引擎没了但还有别的引擎时，说明可以改选；只剩它一个时说明没有别的', t => {
+  const engines = [
+    { kind: 'transcription', service: 'engine.one', name: '引擎一' },
+    { kind: 'transcription', service: 'engine.two', name: '引擎二' },
+  ];
+  const store = createStore(':memory:');
+  t.after(() => store.close());
+  store.put('transcription.choice', 'current', { service: 'engine.one' });
+  let offered = engines;
+  const service = createTranscription({ store, engines: () => offered as never, call: async () => ({}) });
+  assert.equal(service.status().ready, true);
+  // The chosen one is gone, but another is installed.
+  offered = engines.slice(1);
+  assert.equal(service.status().ready, false);
+  assert.equal(service.status().reason, '选定的转写引擎已停用或被移除。');
+  assert.deepEqual(service.status().engines.map(engine => engine.service), ['engine.two']);
+  // Choosing the one that is left makes it ready again.
+  service.choose('engine.two');
+  assert.equal(service.status().ready, true);
+  // When the chosen one was the only engine, the owner is told there is no other.
+  offered = [];
+  assert.equal(service.status().reason, '选定的转写引擎已停用或被移除，当前没有其他引擎。');
+});

@@ -88,9 +88,13 @@ export function createTranscription({ store, engines, call }: { store: Store; en
       // Ready only when the chosen engine is still offered. A disabled plugin leaves a choice
       // that names a service nobody provides, which is said plainly.
       ready: !!chosen && installed.some(engine => engine.service === chosen.service),
-      reason: installed.length === 0 ? '没有安装转写引擎。'
-        : !chosen ? '还没有选择转写引擎。'
-        : !installed.some(engine => engine.service === chosen!.service) ? '选定的转写引擎已停用或被移除。' : '',
+      // What is said depends on what the owner did. A choice that names an engine which is
+      // gone is reported as that, even when it was the only engine, because "none installed"
+      // would hide that a choice is still there waiting for it.
+      reason: !chosen ? (installed.length ? '还没有选择转写引擎。' : '没有安装转写引擎。')
+        : !installed.some(engine => engine.service === chosen.service)
+          ? (installed.length ? '选定的转写引擎已停用或被移除。' : '选定的转写引擎已停用或被移除，当前没有其他引擎。')
+          : '',
     };
   }
   return {
