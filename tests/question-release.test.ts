@@ -71,7 +71,9 @@ test('稍后问题容量已满时入队照常执行，原问题、版本及发�
   app.store.put('interactions',q.id,{...q,createdAt:new Date(Date.now()-120001).toISOString()});
   await app.agent.post('正在排队','main',{readOnly:true});
   const queued=await app.postScopedResult({sourceMessageId:owner.id,scope:{kind:'global'},botId:'fixture',text:'应正常处理的内部回报'});
-  await t.waitFor(()=>assert.equal(app.store.get<Message>('messages',queued.id)?.status,'done'));
+  // The report waits for the read-only turn ahead of it. Under the full suite's load that
+  // turn takes longer than the default wait, so allow the same 15 s similar tests use.
+  await t.waitFor(()=>assert.equal(app.store.get<Message>('messages',queued.id)?.status,'done'),{timeout:15000});
   assert.equal(app.store.get<Card>('interactions',q.id)?.wait,undefined);
   assert.equal(app.store.get<Card>('interactions',q.id)?.version,q.version);
   assert.equal(app.store.list('interaction.later-questions').length,20);
