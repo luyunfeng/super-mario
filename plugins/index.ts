@@ -263,6 +263,8 @@ export interface SystemActions {
   dispatch(input: Record<string, unknown>): Json;
   createTodo(input: Record<string, unknown>): Json;
   listExecutors?(): Json;
+  /** What model each kind of work uses, what a day allows, and the fallbacks that happened. Read only. */
+  modelRouting?(): Json;
   status?(id: string): Json;
   readRun?(id: string): Promise<Json>;
   readRunScope?(args: Record<string, unknown>): Json;
@@ -631,6 +633,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             const { execute: _execute, ...info } = value;
             return info as unknown as Json;
           });
+        }));
+        context.contribute('tools', 'model_routing_read', tool('model_routing_read', '读取按用途分模型的设置：每个用途当前使用的型号、是否跟随主模型、备用型号、今日已用次数和每日上限，以及最近的回退记录。只读，不修改设置。', async (_args, signal) => {
+          signal.throwIfAborted();
+          if (!actions?.modelRouting) throw new Error('按用途分模型不可用');
+          return actions.modelRouting();
         }));
         context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。query 也可检索知识页别名。tag 精确匹配页标签，可与关键词、importance（P0–P3）组合；minRelevance 按已记录相关度下限筛选。分析会议决定、背景或待跟进事项时，按会议主题检索当前作用域可见的知识，并核对来源。', async (args, signal) => {
           signal.throwIfAborted();

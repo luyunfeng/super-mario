@@ -4,7 +4,7 @@ import { abortable, ModelLimitError, modelCompletion } from './model-completion.
 
 function failure(status: number, message: string) { return Object.assign(new Error(message), { status }); }
 
-export async function translateReply(config: AppConfig, text: string, target: string, signal: AbortSignal, store?: Pick<Store, 'get' | 'put' | 'remove'>, timeZone = 'Asia/Shanghai'): Promise<string> {
+export async function translateReply(config: AppConfig, text: string, target: string, signal: AbortSignal, store?: Pick<Store, 'get' | 'list' | 'put' | 'remove'>, timeZone = 'Asia/Shanghai'): Promise<string> {
   if (signal.aborted) throw new DOMException('回复翻译已取消', 'AbortError');
   if (typeof text !== 'string' || !text.trim()) throw failure(400, '没有可翻译的回复正文');
   let characters = 0;

@@ -1,7 +1,58 @@
 // 主模型配置：在抽屉里完成，保存后立即应用。密钥只存在于表单里，提交后清空。
 import { h } from '../lib/dom.js';
-import { Button, Field, Input, Select, Check, Banner } from '../ui/kit.js';
+import { Button, Field, Fold, Input, Select, Check, Banner } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
+
+// What model each kind of work uses, what a day allows, and what to fall back to. It is one
+// setting per purpose; a purpose left empty follows the main model, as all of them did before.
+function purposeRouting(api) {
+  const status = h('p', { role: 'status', class: 'small' });
+  const rows = h('div', { class: 'stack' });
+  const models = h('datalist', { id: 'model-routing-models' });
+  const byPurpose = new Map();
+  async function load() {
+    rows.textContent = '正在读取…';
+    let value;
+    try { value = await api.get('/model/routing'); }
+    catch { rows.textContent = '用途设置读取失败。'; return; }
+    rows.replaceChildren();
+    byPurpose.clear();
+    const known = new Set([value.mainModel, ...value.purposes.flatMap(row => [row.rule.model, row.rule.fallback]).filter(Boolean)]);
+    models.replaceChildren(...[...known].map(id => h('option', { value: id })));
+    for (const row of value.purposes.filter(item => item.purpose !== 'main')) {
+      const model = Input({ value: row.rule.model ?? '', list: 'model-routing-models', placeholder: '跟随主模型', maxlength: 256 });
+      const fallback = Input({ value: row.rule.fallback ?? '', list: 'model-routing-models', placeholder: '无', maxlength: 256 });
+      const limit = Input({ type: 'number', min: '0', max: '1000000', step: '1', value: row.rule.dailyLimit ? String(row.rule.dailyLimit) : '', placeholder: '不限' });
+      const feedback = h('p', { role: 'status', class: 'small' });
+      const used = row.usage.limit ? `今日已用 ${row.usage.used} / ${row.usage.limit} 次` : `今日已用 ${row.usage.used} 次`;
+      const save = Button({ label: '保存', size: 'sm', onClick: async () => {
+        feedback.textContent = '';
+        const body = {};
+        if (model.value.trim()) body.model = model.value.trim();
+        if (fallback.value.trim()) body.fallback = fallback.value.trim();
+        if (limit.value && Number(limit.value) > 0) body.dailyLimit = Number(limit.value);
+        try { await api.put('/model/routing/' + row.purpose, body); }
+        catch (cause) { feedback.textContent = cause.status && cause.status < 500 ? `保存失败：${cause.message}` : '保存结果未知，请重新打开核对。'; return; }
+        await load();
+      } });
+      byPurpose.set(row.purpose, { model, fallback, limit });
+      rows.append(h('fieldset', { class: 'stack', dataset: { purpose: row.purpose } },
+        h('legend', null, row.name),
+        h('p', { class: 'small muted' }, row.about),
+        h('div', { class: 'form-row' },
+          Field({ label: '型号', control: model, hint: row.own ? '' : `当前跟随主模型：${row.model || '未配置'}` }),
+          Field({ label: '备用型号', control: fallback, hint: '首选型号不存在时改用它。' })),
+        Field({ label: '每日上限（次）', control: limit, hint: used + '。留空或 0 表示不限。按主人时区的一天算。' }),
+        h('div', { class: 'row row--between' }, h('span', { class: 'small muted' }, row.blocked ?? (row.fallback ? `备用：${row.fallback}` : '')), save),
+        feedback));
+    }
+    status.textContent = value.fallbacks.length
+      ? `最近 ${value.fallbacks.length} 次回退：` + value.fallbacks.slice(0, 3).map(item => `${item.from} → ${item.to}`).join('、')
+      : '';
+  }
+  void load();
+  return { el: Fold({ title: '按用途分模型', body: [h('p', { class: 'small muted' }, '主对话用上面的模型。其他用途可以单独指定同一接入下的型号，给后台工作用便宜些的，或设每日上限。留空就跟随主模型。'), rows, models, status], open: false }) };
+}
 
 // The same conversation can be selected from its bot in Feishu or its named row on the Web.
 export function conversationModelPicker(api, path, name) {
@@ -102,6 +153,7 @@ export function openModelDrawer({ api, config, onSaved }) {
   const clearKey = Check({ label: '清除已保存的密钥', name: 'clearApiKey' });
   const model = Input({ name: 'model', value: config.model ?? '', placeholder: '模型名称', required: true });
   const picker = conversationModelPicker(api, '/model', 'Web 主会话');
+  const routing = purposeRouting(api);
   const cliCommand = Input({ name: 'cliCommand', value: config.cliCommand ?? '', maxlength: 4096, placeholder: 'codex' });
   const cliConfigDir = Input({ name: 'cliConfigDir', value: config.cliConfigDir ?? '', maxlength: 4096, placeholder: '绝对路径（可选）' });
   const cliFields = h('div', { class: 'stack' },
@@ -154,7 +206,7 @@ export function openModelDrawer({ api, config, onSaved }) {
   });
   const drawer = openDrawer({
     title: '主 Agent 模型', subtitle: '保存接入配置会更新工作台默认模型。模型清单中的「应用到此会话」只切换 Web 主会话。',
-    body: [Field({ label: '接入方式', control: mode }), apiFields, cliFields, Field({ label: '模型', control: model }), ...picker.controls, error],
+    body: [Field({ label: '接入方式', control: mode }), apiFields, cliFields, Field({ label: '模型', control: model }), ...picker.controls, routing.el, error],
     footer: [Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

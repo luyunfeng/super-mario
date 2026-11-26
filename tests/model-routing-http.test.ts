@@ -16,6 +16,8 @@ interface RoutingStatus {
 /** A model endpoint that answers like an OpenAI-compatible one, and counts what it is asked. */
 async function modelService() {
   const asked: { model: string }[] = [];
+  // A model the provider refuses by name, as a provider refuses one that is not offered.
+  const state = { missing: '' };
   const service = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', chunk => chunks.push(chunk as Buffer));
@@ -29,7 +31,7 @@ async function modelService() {
       const translating = /翻译|translat/i.test(body);
       const content = translating ? JSON.stringify({ texts: ['A reply that was translated'] }) : '合成的回复';
       // A model that does not exist is refused as a provider refuses it.
-      if (model.includes('missing')) { res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'model not found' } })); return; }
+      if (state.missing && model === state.missing) { res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'model not found' } })); return; }
       // The SDK asks for a stream by default, and reads server-sent events; it also takes a whole answer.
       const base = { id: 'chatcmpl-synthetic', object: 'chat.completion', model, created: 1 };
       if (request.stream) {
@@ -48,7 +50,7 @@ async function modelService() {
     });
   });
   await new Promise<void>(resolve => service.listen(0, '127.0.0.1', () => resolve()));
-  return { asked, url: 'http://127.0.0.1:' + (service.address() as { port: number }).port + '/v1',
+  return { asked, state, url: 'http://127.0.0.1:' + (service.address() as { port: number }).port + '/v1',
     close: () => new Promise<void>((resolve, reject) => { service.closeAllConnections(); service.close(error => error ? reject(error) : resolve()); }) };
 }
 
@@ -141,4 +143,18 @@ test('a purpose with a model of its own is asked for that model, and one that re
   assert.match(row.blocked!, /达到上限/);
   // The main conversation is not held by another purpose's limit.
   assert.equal((await f.status()).purposes.find(purpose => purpose.purpose === 'main')!.blocked, undefined);
+});
+
+test('a first model that is not there falls back to the spare, and the fallback is recorded', { timeout: 45000 }, async t => {
+  const f = await fixture(t);
+  // A provider that refuses one model by name: the first is had, the spare is not.
+  f.service.state.missing = 'absent-model';
+  assert.equal((await f.web('model/routing/translation', 'PUT', { model: 'absent-model', fallback: 'spare-model' })).status, 200);
+  f.server.app.store.put('messages', 'synthetic-reply', { id: 'synthetic-reply', conversationId: 'main', role: 'assistant', text: '需要翻译的回复', status: 'done', createdAt: '2026-11-27T00:00:00Z' });
+  const answer = await f.web<{ text?: string; error?: string }>('reply-translation', 'POST', { messageId: 'synthetic-reply', conversationId: 'main', target: 'en' });
+  // The provider was asked for the first, and then for the spare.
+  assert.deepEqual(f.service.asked.map(row => row.model), ['absent-model', 'spare-model']);
+  assert.equal(answer.status, 200, JSON.stringify(answer.body));
+  const status = await f.status();
+  assert.deepEqual(status.fallbacks.map(row => ({ purpose: row.purpose, from: row.from, to: row.to })), [{ purpose: 'translation', from: 'absent-model', to: 'spare-model' }]);
 });
