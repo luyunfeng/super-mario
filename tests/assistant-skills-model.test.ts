@@ -2703,6 +2703,8 @@ test('Web 与飞书项目对话读取原收件的失败派发，不重复执行'
 
 test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询且可续页', async t => {
   let adapter!: FeishuOptions, projectId = '', otherId = '';
+  // Closed in the finally below, before the server and its store are closed.
+  let extraAssistant: { close(): Promise<void> } | undefined;
   const sent: string[] = [];
   const expectedTitles = Array.from({ length: 25 }, (_, i) => '派发 ' + i).concat('确认时间', '准备评审', '确认收件', '确认发件', '合成联系人', '核对交付件','待验收的合成成果');
   let groupId = '';
@@ -2792,7 +2794,7 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
       analyze: async () => ({ disposition: 'waiting_user', summary: '需要选择环境', question: '需要哪个环境？', tasks: [] }),
       createTodo: input => server.app.createTodo(input), updateTodo: (id, input) => server.app.updateTodo(id, input),
       archive: (id, version) => server.app.inbox.archive(id, version) });
-    t.after(() => assistant.close());
+    extraAssistant = assistant;
     await server.app.inbox.ingest('feishu:fixture', [{ thread: 'source', last: '1', title: '合成联系人', text: '私有正文',
       origin: { kind: 'direct', chatId: 'oc_source', senderName: '合成联系人' } }]);
     const source = server.app.inbox.list()[0]!;
@@ -2830,7 +2832,12 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
     assert.ok(server.app.approvals.list().every(item => item.status === 'pending'));
     assert.equal(server.app.store.get<{status:string}>('plans', 'plan')?.status, 'pending');
     assert.equal(server.app.store.get<{status:string}>('interactions', 'question')?.status, 'open');
-  } finally { await server.close(); }
+  } finally {
+    // This assistant shares the server's store but is not owned by the workbench, so it
+    // has to stop before the server closes that store. An after() hook runs too late.
+    await extraAssistant?.close();
+    await server.close();
+  }
 });
 
 test('Web 和飞书按发言角色查项目原话，翻页只计入匹配角色', async t => {
