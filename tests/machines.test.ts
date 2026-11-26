@@ -268,3 +268,16 @@ test('optional agent instance identity is retained, replaced, validated and neve
  await f.connect(hello);assert.equal(f.hub.list()[0].agentInstanceId,undefined);
  const invalid=await f.connect(null);assert.throws(()=>f.hub.attach(invalid.ws,{...hello,agentInstanceId:'bad\nidentity'}),/Invalid machine hello/);
 });
+
+test('the build an agent node reports is kept for the owner and validated, and an older node without it still connects',async t=>{
+ const f=await fixture(t);const commit='a'.repeat(40);
+ await f.connect({...hello,build:{commit,dirty:true}});
+ assert.deepEqual(f.hub.list()[0].build,{commit,dirty:true});
+ await f.connect({...hello,build:{commit:'unknown'}});assert.deepEqual(f.hub.list()[0].build,{commit:'unknown'},'a node outside a build says so');
+ // A node from before this field was added sends none. It is not refused for that.
+ await f.connect(hello);assert.equal(f.hub.list()[0].build,undefined);
+ const invalid=await f.connect(null);
+ for(const build of [null,7,'abc',{},{commit:''},{commit:'abc'},{commit:'A'.repeat(40)},{commit:'g'.repeat(40)},{commit,dirty:'yes'},{commit:'unknown',dirty:1}])
+  // These values are invalid on purpose, so the cast stands for an untrusted node.
+  assert.throws(()=>f.hub.attach(invalid.ws,{...hello,build:build as never}),/Invalid machine hello/,JSON.stringify(build));
+});

@@ -1,6 +1,9 @@
 import {h,replace} from './lib/dom.js';
 
 const button=(text,action)=>h('button',{type:'button',class:'btn btn--sm',onclick:action},text);
+// A build as a person reads it. A node outside a build, and one made with uncommitted
+// changes, are both said plainly: neither matches a commit exactly.
+const buildText=build=>!build?.commit||build.commit==='unknown'?'未构建':build.commit.slice(0,10)+(build.dirty?'（含未提交改动）':'');
 function machineCredentials({request,submit,csrf,signal,active}){
   const issued=h('div',{class:'stack'}),rows=h('div',{class:'stack'}),actions=h('div',{class:'stack'});
   const machineId=h('input',{class:'input',type:'text',required:true,autocomplete:'off','aria-label':'签发凭据的执行机 ID'});
@@ -58,7 +61,8 @@ export function createAdminMachines({request,submit,csrf,current}){
   const credentials=machineCredentials({request,submit,csrf,signal:life.signal,active});
   section.append(credentials.el);
   let loaded=false;
-  function paint(rows){
+  function paint(result){
+    const rows=result.machines,server=result.build;
     loaded=true;loadButton.textContent='刷新执行机';
     status.textContent=rows.length?'已登记 '+rows.length+' 台执行机，'+rows.filter(row=>row.online).length+' 台在线。':'尚未连接过执行机。';
     const ids=new Set(rows.map(row=>row.id));
@@ -71,6 +75,8 @@ export function createAdminMachines({request,submit,csrf,current}){
           ['执行机 ID',row.id],['上报名',row.reportedName || '未提供'],['在线状态',row.online?'在线':'离线'],
           ['平台',row.platform || '未提供'],['最近连接',row.connectedAt?new Date(row.connectedAt).toLocaleString('zh-CN'):'暂无记录'],
           ['能力',row.capabilities.length?row.capabilities.join('、'):'未上报能力'],
+          ['构建',buildText(row.build)+(row.build?.commit&&server?.commit&&row.build.commit!==server.commit
+            ?'（与本服务端的构建 '+buildText(server)+' 不同，请把执行机和服务端更新到同一版本）':'')],
         ].map(([label,value])=>[h('dt',{},label),h('dd',{},value)])),
         h('form',{class:'stack',onsubmit:event=>{event.preventDefault();void save(row.id,name.value.trim());}},
           h('label',{class:'field'},'执行机显示名',name),
@@ -86,7 +92,7 @@ export function createAdminMachines({request,submit,csrf,current}){
         if(!active())return;
         const result=await request('machines/remove',{id:row.id},csrf,life.signal);
         if(!active())return;
-        paint(result.machines);
+        paint(result);
         status.textContent='已移除执行机 '+(row.name || row.id)+'。';
         await credentials.afterRemoval(row.id);
       })))));
@@ -98,7 +104,7 @@ export function createAdminMachines({request,submit,csrf,current}){
       status.textContent='正在读取执行机…';
       try{
         const result=await request('machines',undefined,{},life.signal);
-        if(active())paint(result.machines);
+        if(active())paint(result);
       }catch(error){
         if(!active())return;
         loaded=false;replace(list);status.textContent='执行机清单未能读取。';loadButton.textContent='刷新执行机';throw error;
@@ -111,7 +117,7 @@ export function createAdminMachines({request,submit,csrf,current}){
       try{
         const result=await request('machines/name',{id,name},csrf,life.signal);
         if(!active())return;
-        drafts.delete(id);paint(result.machines);status.textContent=name?'已保存执行机显示名。':'已恢复执行机上报名。';
+        drafts.delete(id);paint(result);status.textContent=name?'已保存执行机显示名。':'已恢复执行机上报名。';
       }catch(error){if(active())throw error;}
     });
   }

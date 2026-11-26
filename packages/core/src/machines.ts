@@ -90,7 +90,10 @@ export function createMachineHub({ store, events }: { store: Store; events: Even
       if (!hello || hello.type !== 'hello' || !nonempty(hello.machineId) || !nonempty(hello.name)
         || !nonempty(hello.platform) || (hello.agentInstanceId !== undefined && (typeof hello.agentInstanceId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(hello.agentInstanceId))) || !Array.isArray(hello.capabilities) || !hello.capabilities.every(nonempty)
         || (hello.executors !== undefined && (!Array.isArray(hello.executors)
-          || !hello.executors.every(executor => validExecutor(executor, hello.machineId))))) {
+          || !hello.executors.every(executor => validExecutor(executor, hello.machineId))))
+        || (hello.build !== undefined && (typeof hello.build !== 'object' || hello.build === null
+          || typeof hello.build.commit !== 'string' || !/^(?:unknown|[0-9a-f]{40})$/.test(hello.build.commit)
+          || (hello.build.dirty !== undefined && typeof hello.build.dirty !== 'boolean')))) {
         throw new MachineError('Invalid machine hello', 400, 'no');
       }
       if (ws.readyState !== WebSocket.OPEN) throw new MachineError('Machine connection is not open', 503, 'no');
@@ -99,6 +102,7 @@ export function createMachineHub({ store, events }: { store: Store; events: Even
         ...(hello.agentInstanceId === undefined ? {} : { agentInstanceId: hello.agentInstanceId }),
         id: hello.machineId, name: hello.name, platform: hello.platform, capabilities: hello.capabilities,
         ...(hello.executors === undefined ? {} : { executors: hello.executors }),
+        ...(hello.build === undefined ? {} : { build: hello.build }),
         online: true, connectedAt: new Date().toISOString(),
       });
       store.put('machines', machine.id, machine);

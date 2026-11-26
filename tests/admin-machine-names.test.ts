@@ -69,3 +69,26 @@ test('removing an offline machine commits credentials and alias together before 
   // A machine that connected before dedicated credentials existed may also be removed.
   admin.removeMachine('first', credentials.revoke);
 });
+
+test('the machine list carries each node build beside the server build, and leaves it out for an older node', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'mario-admin-build-'));
+  const store = createStore(join(dir, 'test.sqlite'));
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  const commit = 'c'.repeat(40);
+  const base: MachineInfo = { id:'node-a',name:'Agent A',online:true,platform:'linux',connectedAt:'2026-11-20T12:00:00Z', capabilities:['executor.input'], executors:[] };
+  const machines: MachineInfo[] = [
+    { ...base, build: { commit, dirty: true } },
+    { ...base, id:'node-b', name:'Agent B', build: { commit: 'unknown' } },
+    // A node from before builds were reported sends no build at all.
+    { ...base, id:'node-c', name:'Agent C' },
+  ];
+  const admin = createAdminOverview({ store, version:'fixture', startedAt:base.connectedAt, demo:true, address:()=>null,
+    plugins:()=>[], devices:()=>[], machines:()=>machines });
+  const listed = admin.machineList();
+  assert.deepEqual(listed.machines.map(machine => machine.build), [{ commit, dirty: true }, { commit: 'unknown' }, undefined]);
+  // The server's own build comes from the same record the health route and the node handshake use.
+  const server = listed.build;
+  assert.ok(server.commit === 'unknown' || /^[0-9a-f]{40}$/.test(server.commit));
+  assert.equal(typeof server.dirty, 'boolean');
+  assert.equal(Object.hasOwn(listed.machines[2]!, 'build'), false, 'an older node has no build key, not an empty one');
+});

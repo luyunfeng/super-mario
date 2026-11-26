@@ -77,7 +77,9 @@ export type WebExtension =
   | { slot: 'advanced-interface'; renderer: 'stream'; title:string; lines:string[]; fallback:string }
   | { slot: 'advanced-interface'; renderer: 'diff'; title: string; patch: string; fallback: string };
 export interface AppEvent { id: number; type: string; data: Json; createdAt: string }
-export interface MachineInfo { agentInstanceId?: string; id: string; name: string; online: boolean; platform: string; connectedAt: string; capabilities: string[]; executors?: ExecutorInfo[] }
+/** The build an agent node was made from, as it reports it. "unknown" outside a build. */
+export interface NodeBuild { commit: string; dirty?: boolean }
+export interface MachineInfo { agentInstanceId?: string; id: string; name: string; online: boolean; platform: string; connectedAt: string; capabilities: string[]; executors?: ExecutorInfo[]; build?: NodeBuild }
 export interface ModelConfig { provider: string; model: string; baseUrl?: string; apiKey?: string; cliCommand?: string; cliConfigDir?: string }
 export interface AppConfig { host: string; port: number; dataDir: string; token?: string; demo: boolean; model?: ModelConfig; feishuWeb?: { baseUrl: string; token?: string; pollIntervalMs?: number }; feishu?: { appId: string; appSecret: string; profile?: string; collectEnabled?: boolean; pollMs?: number } }
 /** A project is a durable workspace on one connected machine, not an execution attempt. */
@@ -94,7 +96,7 @@ export interface StartPagePreference { key: string; revision: number }
 export interface Snapshot { workspaceTimezone?: string; startPage?: StartPagePreference; modelRevision?: string; mainAssistant?: MainAssistantProfile; inboxConversations?: import('./inbox-conversations.ts').InboxConversation[]; inboxAssistant?: {enabled:boolean;available:boolean;reason?:string;workspace:string}; inboxHandling?: import('./inbox-handling.ts').InboxHandlingState[]; attentionCount?: number; problems?: Array<{ area: 'agent' | 'channel'; message: string; fix: string }>; setup?: { agent: boolean; project: boolean; memory: boolean; channel: 'done' | 'skipped' | 'todo' }; agentTurns?: Array<Pick<Message, 'id' | 'todoId' | 'conversationId' | 'role' | 'status' | 'createdAt'>>; background?: {failed:number;unknown:number;outboxFailed:number;outboxUnknown:number}; webExtensions?: Array<{ id: string; value: WebExtension }>; projects?: Project[]; mode: 'demo' | 'live'; agent: { available: boolean; reason?: string }; plugins: PluginInfo[]; executors: ExecutorInfo[]; machines: MachineInfo[]; todos: Todo[]; knowledge: KnowledgeEntry[]; messages: Message[]; runs: Run[]; inbox?: InboxItem[]; approvals?: Approval[]; signals?: SupervisionSignal[]; version: string }
 /** Agent nodes identify themselves before issuing any RPC messages. No command execution is implied. */
 export type NodeMessage =
-  | { type: 'hello'; agentInstanceId?: string; machineId: string; name: string; platform: string; capabilities: string[]; executors?: ExecutorInfo[] }
+  | { type: 'hello'; agentInstanceId?: string; machineId: string; name: string; platform: string; capabilities: string[]; executors?: ExecutorInfo[]; build?: NodeBuild }
   | { type: 'event'; event: string; data: Json }
   | { type: 'heartbeat' }
   | { type: 'result'; id: string; result?: Json; error?: string };

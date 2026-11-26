@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import WebSocket from 'ws';
+import { buildInfo } from '../../../packages/core/src/build-info.ts';
 import type { NodeOptions } from '../../../packages/plugin-sdk/src/index.ts';
 import type { JsonObject, NodeMessage } from '../../../packages/protocol/src/index.ts';
 
@@ -75,6 +76,7 @@ export function startAgentNode(options: NodeOptions & { piCommand?: string }): {
   // Snapshot the whitelist; node.status always remains the built-in read-only method.
   const handlers = new Map(Object.entries(options.handlers ?? {}));
   const capabilities = [...new Set(['node.status', ...handlers.keys()])];
+  const build = buildInfo();
   let stopped = false;
   let socket: WebSocket;
   let reconnect: ReturnType<typeof setTimeout> | undefined;
@@ -110,6 +112,7 @@ export function startAgentNode(options: NodeOptions & { piCommand?: string }): {
       type: 'hello', agentInstanceId, machineId: options.machineId, name: options.name,
       platform: process.platform, capabilities,
       ...(options.executors === undefined ? {} : { executors: options.executors }),
+      build: { commit: build.commit, ...(build.dirty ? { dirty: true } : {}) },
     }));
     connection.on('message', (data) => {
       if (!active()) return;

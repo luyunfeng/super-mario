@@ -8,6 +8,7 @@ import {createAdminRoutes} from './admin-routes.ts';
 import { readWebThreadAssistant } from '../../../plugins/assistant-profile.ts';
 import {proofForBrowserToken} from '../../../plugins/browser-devices.ts';
 import {createBrowserAccess,pairingQR} from './browser-access.ts';
+import { buildInfo } from '../../../packages/core/src/build-info.ts';
 import { privateThreadPage, searchPrivateThreadHits, searchPrivateThreads } from './feishu-thread-history.ts';
 import { createSessionAnalysis } from './session-analysis.ts';
 import { nativeExportProgress } from '../../../packages/core/src/native-conversation-export.ts';
@@ -127,7 +128,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
-      if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version });
+      // The package version says which release line this is. The commit says which build.
+      if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version, build: buildInfo() });
       if(path.startsWith('/api/v1/admin/'))return await adminRoutes(req,res,path);
       if(path.startsWith('/api/v1/public/password/'))return await passwordRoutes(req,res,path);
       if(path==='/api/v1/public/browser-pair'){

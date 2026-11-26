@@ -26,11 +26,25 @@ test('管理员可为在线执行机设置显示名，离线后仍可恢复上�
   const ws=new WebSocket(server.url.replace('http:','ws:')+'/api/v1/node',{headers});
   t.after(()=>ws.terminate());
   await once(ws,'open');
-  ws.send(JSON.stringify({type:'hello',machineId:'synthetic-machine',name:'合成上报名',platform:'linux',capabilities:[]}));
+  ws.send(JSON.stringify({type:'hello',machineId:'synthetic-machine',name:'合成上报名',platform:'linux',capabilities:[],build:{commit:'d'.repeat(40),dirty:true}}));
   await once(ws,'message');
   await panel.getByRole('button',{name:'刷新执行机'}).click();
   const reported=panel.getByRole('article',{name:'合成上报名',exact:true});
   await expect(reported).toContainText('在线');
+  // The node's build is shown, and a build other than the server's own is pointed out.
+  await expect(reported).toContainText('dddddddddd（含未提交改动）');
+  await expect(reported).toContainText('与本服务端的构建');
+  await expect(reported).toContainText('请把执行机和服务端更新到同一版本');
+  // A node from before builds were reported says so, and is not compared.
+  const older=new WebSocket(server.url.replace('http:','ws:')+'/api/v1/node',{headers});
+  t.after(()=>older.terminate());
+  await once(older,'open');
+  older.send(JSON.stringify({type:'hello',machineId:'older-machine',name:'旧版执行机',platform:'linux',capabilities:[]}));
+  await once(older,'message');
+  await panel.getByRole('button',{name:'刷新执行机'}).click();
+  const olderCard=panel.getByRole('article',{name:'旧版执行机',exact:true});
+  await expect(olderCard).toContainText('未构建');
+  await expect(olderCard).not.toContainText('与本服务端的构建');
   await expect(reported.getByRole('button',{name:'移除执行机'})).toHaveCount(0);
   await reported.getByRole('textbox',{name:'执行机显示名'}).fill('构建节点');
   await reported.getByRole('button',{name:'保存显示名'}).click();

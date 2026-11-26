@@ -4,6 +4,7 @@ import type {AddressInfo} from 'node:net';
 import type {MachineInfo} from '../../../packages/protocol/src/index.ts';
 import type {Store} from '../../../packages/plugin-sdk/src/index.ts';
 import {adminEndpoints} from './admin-endpoints.ts';
+import {buildInfo} from '../../../packages/core/src/build-info.ts';
 
 type Options={
   store:Store; version:string; startedAt:string; demo:boolean;
@@ -75,10 +76,12 @@ export function createAdminOverview(options:Options) {
     return read();
   }
   function machineList(){
-    return {machines:options.machines().map(({id,name:reportedName,online,platform,connectedAt,capabilities})=>({
+    // Each node's build is returned beside the server's own, so the page can say when a
+    // machine runs a build other than the one the server was started from.
+    return {machines:options.machines().map(({id,name:reportedName,online,platform,connectedAt,capabilities,build})=>({
       id, name:store.get<string>(machineNames,id)??reportedName, reportedName, online, platform, connectedAt,
-      capabilities:[...capabilities],
-    }))};
+      capabilities:[...capabilities], ...(build ? { build } : {}),
+    })),build:buildInfo()};
   }
   function renameMachine(id:unknown,value:unknown){
     if(typeof id!=='string'||!options.machines().some(machine=>machine.id===id))
