@@ -1,5 +1,7 @@
 // 一条邮件收件的正文。经工作台从主人的邮箱读取，只读，不把邮件标记为已读。
 import { h, replace } from '../lib/dom.js';
+import { Button } from '../ui/kit.js';
+import { openMailReply } from './mail-reply.js';
 
 const time = value => {
   const at = Date.parse(value);
@@ -9,11 +11,17 @@ const named = address => address?.name ? `${address.name} <${address.email}>` : 
 const list = addresses => Array.isArray(addresses) && addresses.length ? addresses.map(named).join('、') : '';
 
 /** `row` is the inbox item as stored. It is read once per item, when its detail opens. */
+/** The account a message is in, as the page needs it to reply from it. */
+async function accountOf(api, id) {
+  const state = await api.get('/mail/accounts');
+  return state.find(entry => entry.account.id === id)?.account;
+}
+
 export function mailInboxBody(api, row) {
   const root = h('div', { class: 'stack', 'aria-label': '邮件正文' });
   const target = row?.origin?.mail;
   if (!target) return { el: root };
-  let loaded = null, busy = false, seq = 0, error = '';
+  let loaded = null, busy = false, seq = 0, error = '', proposed = false, account = null;
   const body = h('div', { class: 'stack' });
   root.append(body);
   async function load() {
@@ -25,6 +33,9 @@ export function mailInboxBody(api, row) {
       const value = await api.get('/mail/inbox/' + encodeURIComponent(row.id));
       if (stamp !== seq) return;
       loaded = value;
+      // The account is needed only to reply. When it cannot be read the message is still
+      // shown, and the reply is not offered.
+      account = await accountOf(api, target.account).catch(() => null);
     } catch (cause) {
       if (stamp !== seq) return;
       error = cause.message;
@@ -51,6 +62,13 @@ export function mailInboxBody(api, row) {
             loaded.attachments.map(file => h('li', { class: 'small' }, `${file.filename || '（没有文件名）'} · ${file.mimeType} · ${file.size} 字节`)),
             loaded.attachmentCount > loaded.attachments.length && h('p', { class: 'small muted' }, `共 ${loaded.attachmentCount} 个附件，这里只列出前 ${loaded.attachments.length} 个。`))
           : null,
+        // Replying asks for the send. It is an approval, and the mail goes out after it.
+        account ? h('div', { class: 'row row--wrap' },
+          Button({ label: '回复', size: 'sm', onClick: () => openMailReply({ api, account, message: loaded,
+            onProposed: () => { proposed = true; paint(); } }) }),
+          h('span', { class: 'small muted' }, '回复会先成为一张审批，你同意后才会发出。')) : null,
+        proposed ? h('p', { class: 'small', role: 'status' }, '已提交审批，这封邮件还没有发出。', ' ',
+          h('a', { class: 'small', href: '#chat/approvals' }, '前往审批')) : null,
       ]);
   }
   void load();
