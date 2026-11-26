@@ -25,6 +25,9 @@ export interface InboxOrigin {
   /** A GitHub notification that a branch's continuous integration failed. Followed until the
    *  branch recovers, the branch is deleted, or the pull request is merged or closed. */
   githubCi?: { repository: string; branch: string; workflow: string; pull?: number };
+  /** An email in one of the owner's mailboxes. The message is read again from the mailbox
+   *  when it is opened, so nothing of it is kept here beyond where it is. */
+  mail?: { account: string; mailbox: string; uid: number };
 }
 
 export function excludesPersonalGroupFromAutomation(origin?: InboxOrigin): boolean {
