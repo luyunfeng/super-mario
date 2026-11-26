@@ -42,6 +42,46 @@
 
   --sidebar-w: 236px;
   --topbar-h: 54px;
+  --shell-edge: var(--text);
+}
+
+/* 深色：同一套语义的暖色深底，不是纯黑。文字、品牌色和状态色都提亮，在深底上保持清晰；
+   次要文字的对比度不低于浅色主题。 */
+:root[data-theme="dark"] {
+  --bg: #1b1713;
+  --surface: #221d18;
+  --surface-2: #2b241e;
+  --surface-hover: #322a23;
+  --line: #453b31;
+  --line-strong: #7a6a58;
+
+  --text: #efe7da;
+  --text-2: #d2c7b8;
+  --text-3: #a89b8b;
+
+  --brand: #f0715f;
+  --brand-hover: #ff8a78;
+  --brand-soft: #3a221d;
+  --brand-line: #b5614f;
+
+  --danger: #f97066;
+  --danger-soft: #3a211f;
+  --danger-line: #8a3a34;
+  --warn: #fdb022;
+  --warn-soft: #362a1a;
+  --warn-line: #8a6420;
+  --ok: #47cd89;
+  --ok-soft: #16302a;
+  --ok-line: #2a6b4c;
+  --info: #84caff;
+  --info-soft: #1a2b3a;
+  --info-line: #2f5f85;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 30%);
+  --focus: 0 0 0 3px rgb(240 113 95 / 30%);
+  /* The shell's own edges. In the light theme they are the text colour, which on a dark
+   *  ground would be a near-white line and too loud. */
+  --shell-edge: #7a6a58;
 }
 
 *, *::before, *::after { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }

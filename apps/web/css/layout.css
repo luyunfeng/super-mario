@@ -3,7 +3,7 @@
 
 .sidebar {
   display: flex; flex-direction: column; gap: 6px;
-  padding: 14px 12px; background: var(--surface); border-right: 2px solid var(--text);
+  padding: 14px 12px; background: var(--surface); border-right: 2px solid var(--shell-edge);
   min-height: 0; overflow: auto;
 }
 .brand {
@@ -57,7 +57,7 @@
 .main-col { display: flex; flex-direction: column; min-width: 0; height: 100dvh; }
 .topbar {
   flex: none; display: flex; align-items: center; gap: 12px; height: var(--topbar-h);
-  padding: 0 24px; background: var(--surface); border-bottom: 2px solid var(--text);
+  padding: 0 24px; background: var(--surface); border-bottom: 2px solid var(--shell-edge);
 }
 .search { position: relative; flex: 1; min-width: 0; max-width: 440px; }
 .search__input {

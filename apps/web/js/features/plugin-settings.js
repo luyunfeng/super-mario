@@ -1,4 +1,5 @@
 import { readingFontEditor } from './reading-fonts.js';
+import { themePicker } from './theme.js';
 import { browserNotificationSettingsEditor } from './browser-notifications.js';
 import { openShortcutSettings } from './shortcuts.js';
 import { preferenceEditor } from './plugin-preferences.js';
@@ -97,10 +98,16 @@ export function createPluginSettings({ api, store, router }) {
   let rightPinned = readLocal('sm.tokenStats.right', false) === true;
   const launch = () => openTokenStatistics({ api, store });
   const right = h('button', { class: 'plugin-right', hidden: true, onclick: launch }, 'Token 统计');
+  /** The menu entry of the workbench's own look. It is not a plugin. */
+  const APPEARANCE = '__appearance';
   let drawer, selected = 'token-statistics';
   const menu = h('div',{class:'settings-menu'});
+  // Its own menu, apart from the plugins' one, which is drawn again as the plugins change.
+  const look = h('button', { type: 'button', 'aria-pressed': 'false', onclick: () => { selected = APPEARANCE; paint(); } },
+    h('strong', null, '外观'), h('small', null, '浅色或深色'));
+  const lookMenu = h('div', { class: 'settings-menu', 'aria-label': '工作台外观' }, look);
   const search = h('input',{type:'search',placeholder:'搜索插件', 'aria-label':'搜索插件',oninput:()=>paint()});
-  const layout = h('div',{class:'settings-layout'},h('aside',{},search,menu),list);
+  const layout = h('div',{class:'settings-layout'},h('aside',{},lookMenu,search,menu),list);
   function openFeature(item) {
     drawer?.close();
     if (item.route === '#agent?tokenStats=1') launch();
@@ -108,6 +115,17 @@ export function createPluginSettings({ api, store, router }) {
   }
   function paint() {
     const { snapshot, unauthorized, loadError } = store.view;
+    // The look is always there, with or without plugins, and is not searched for.
+    look.setAttribute('aria-pressed', String(selected === APPEARANCE));
+    if (selected === APPEARANCE) {
+      search.value = '';
+      keyedList(menu, [], () => '', () => h('span'));
+      replace(list, h('section', { class: 'plugin-section', 'aria-label': '外观' },
+        h('div', { class: 'row' }, h('strong', null, '外观'), Pill('已启用', 'ok')),
+        h('p', null, '浅色是纸色工作台，深色是同一套配色的暖色深底。选择保存在当前浏览器，所有标签页跟着变。'),
+        themePicker()));
+      return;
+    }
     const plugins = unauthorized ? [] : snapshot?.plugins ?? [];
     right.hidden = !rightPinned || !plugins.some(p => p.id === 'token-statistics' && p.status === 'active');
     const available = new Map();

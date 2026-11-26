@@ -33,12 +33,16 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
 .code-sidebar nav .code-tree__item.is-active { background: var(--brand-soft); color: var(--brand); font-weight: 650; box-shadow: inset 3px 0 0 var(--brand); }
 .code-sidebar__text {
   font-size: calc(12.5px * var(--reading-scale, 1)); line-height: 1.55; white-space: pre; overflow: auto; max-height: 58vh;
-  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fcfaf5;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
 }
 .diff-line { display: inline-block; min-width: 100%; padding: 0 4px; border-radius: 2px; }
 .diff-line--add { background: #e6f7ed; color: #065f46; }
 .diff-line--del { background: #fdecec; color: #991b1b; }
 .diff-line--hunk { background: #eef4ff; color: #1d4ed8; font-weight: 600; }
+/* 深色下的差异行：深底浅字，增删和提示三种仍然分得清。 */
+:root[data-theme="dark"] .diff-line--add { background: #16302a; color: #7ee2ae; }
+:root[data-theme="dark"] .diff-line--del { background: #3a211f; color: #ffa39c; }
+:root[data-theme="dark"] .diff-line--hunk { background: #1a2b3a; color: #a8d8ff; }
 .diff-line--meta { color: var(--text-3); }
 @media (max-width: 800px) { .code-sidebar { position: fixed; inset: 0; z-index: 60; width: 100%; max-width: none; border-left: 0; } }
 

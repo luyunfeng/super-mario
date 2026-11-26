@@ -3,6 +3,7 @@ import { h, readLocal, writeLocal } from './lib/dom.js';
 import {acceptBrowserPair,takeBrowserPair} from './features/browser-devices.js';
 import { createApi, consumeSharedToken } from './lib/api.js';
 import { installReadingFonts } from './features/reading-fonts.js';
+import { installTheme } from './features/theme.js';
 import { installPresence } from './features/presence.js';
 import { createStore } from './lib/store.js';
 import { createRouter, PAGE_NAMES } from './lib/router.js';
@@ -28,6 +29,7 @@ import { createMemoryPage } from './pages/memory.js';
 import { createChannelsPage } from './pages/channels.js';
 
 applyHintPreference();
+installTheme();
 
 let pendingBrowserPair=takeBrowserPair();
 let applyStartPage = !location.hash || /^#\??token=/.test(location.hash);
