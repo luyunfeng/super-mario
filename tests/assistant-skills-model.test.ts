@@ -5450,3 +5450,40 @@ test('Web 与飞书项目对话通过模型工具读取本项目工作树登记'
     await t.waitFor(() => assert.ok(sent.includes(answer)));
   } finally { await server.close(); }
 });
+
+// The system prompt is recorded as a JSON string. Take out the sentences about automation.
+function automationLines(requests:{system:string}[]):string[] {
+  return requests.flatMap(request => {
+    let parts:unknown = request.system;
+    try { parts = JSON.parse(request.system); } catch { /* a plain string is one part */ }
+    return (Array.isArray(parts) ? parts.map(part => String((part as {content?:string}).content ?? part)) : [String(parts)])
+      .flatMap(text => text.split('\n')).filter(line => line.startsWith('主人给当前范围设了自动处理规则'));
+  });
+}
+
+test('主对话和项目对话把当前范围的自动处理规则告诉模型', async t => {
+  const answer = '好的。';
+  const { server, api, ask, requests } = await fixture(t, () => ({ role: 'assistant', content: answer }));
+  try {
+    await api('/plugins/feishu', { enabled: false });
+    const project = await server.app.createProject({ name: '受信目录项目' });
+    const marker = '当出现权限审批，仅当工作目录在 /srv/fixture-trusted 内时，由自动跟进 Agent直接处理';
+    // The project allows one kind of approval in one directory. The global scope stays empty.
+    server.app.policies.write({ projectId: project.id }, { rules: [
+      { id: 'fixture-rule', kind: 'permission', handler: 'supervisor', mode: 'auto', cwdUnder: '/srv/fixture-trusted' },
+    ] });
+
+    // No rules at the global scope, so nothing is said about automation there.
+    const globalTurn = await ask('检查本地模型连接。');
+    assert.equal(globalTurn, answer);
+    assert.equal(requests.some(request => automationLines([request]).length>0 && !automationLines([request]).some(line=>line.includes(marker))), false,
+      'global scope must not carry the project rule: ' + automationLines(requests).join(' | '));
+    const beforeProject = requests.length;
+    await ask('检查本地模型连接。', '/projects/' + project.id + '/messages');
+    const projectLines = automationLines(requests.slice(beforeProject));
+    assert.equal(projectLines.length, 1, projectLines.join(' | '));
+    assert.ok(projectLines[0].includes(marker), projectLines[0]);
+    // The rule says who handles an approval. It must not read as a wider permission.
+    assert.match(projectLines[0], /不扩大工具权限，也不授权对外发消息、删除或花钱/);
+  } finally { await server.close(); }
+});

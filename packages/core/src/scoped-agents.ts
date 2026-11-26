@@ -5,7 +5,7 @@ import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, T
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import { MAIN_AGENT_SYSTEM_PROMPT, SCOPED_WORK_SYSTEM_PROMPT, WEB_THREAD_GUIDANCE, webThreadAssistantGuidance } from './prompts.ts';
 import { conversationModels } from './agent-runtime/model-catalog.ts';
-import { createAgentRuntime, recoverInterruptedInputs, removeScopedTranscript } from './agent-runtime/index.ts';
+import { createAgentRuntime, recoverInterruptedInputs, removeScopedTranscript, type AutomationPolicy } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
 type ScopedPostContext = Omit<NonNullable<Parameters<Runtime['post']>[2]>, 'readOnlyAction'>;
@@ -33,6 +33,8 @@ interface Options {
   mainSkillCatalog?: (assistantId?: string) => Promise<string>;
   mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>;
   projectInstructions?: (projectId: string) => Promise<string>;
+  // The owner's automation rules for the current project, read on each turn.
+  automationPolicy?: (projectId?: string) => AutomationPolicy | undefined;
   projectContext?: (projectId:string)=>Json;
   workDecisions?: (scope?:BotScope, projectId?:string)=>unknown;
   validScope?: (scope: BotScope, botId: string, input?: Message, threadId?: string) => boolean | void;

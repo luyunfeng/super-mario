@@ -56,7 +56,9 @@ interface Options {
   onDirectWebInput?(message:Message):void;
   onInternalQueued?(message:Message, sourceId:string):()=>void;
   reviewsForSource?:(input?:Message)=>PendingOwnerReview[];
-  reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: (assistantId?: string) => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; conversationThreadId?: string; botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json }
+  reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: (assistantId?: string) => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>;
+  // The owner's automation rules for a project, read again on each turn.
+  automationPolicy?: (projectId?: string) => AutomationPolicy | undefined; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; conversationThreadId?: string; botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 interface PendingTurn {
@@ -643,6 +645,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const historyGuide = allowed('current_web_message_search') && contributions.list('tools').some(tool=>tool.value.name==='current_web_message_search')
           ? webHistoryGuidance
           : activeInput?.conversationId.startsWith('web:') ? '当前对话历史搜索不可用。可根据本轮已提供的上文作答；需要更早的原话时，请主人提供摘录。' : '';
+        const policy = options.automationPolicy?.(currentProjectId);
+        const automationGuide = policy && policy.rules.length ? describeAutomation(policy) : '';
         const sections = [
           ...(!webPlugins && (ownConversation === 'main' || scope?.kind === 'global') ? [
             contributions.list('services').some(service => service.value.name === 'conversation-export.markdown')
@@ -663,6 +667,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           ...(inboxGuide ? [inboxGuide] : []),
           ...(boardGuide ? [boardGuide] : []),
           ...(subscriptionGuide ? [subscriptionGuide] : []),
+          ...(automationGuide ? [automationGuide] : []),
           ...(activeInput?.todoId ? ['本轮消息关联的待办 ID 是 ' + JSON.stringify(activeInput.todoId) + '。用户说“这项”时用 todo_detail 核对该事项的最新事实。关联待办本身不授权修改、派发或验收。'] : []),
           ...(replyRoute?.channel === 'feishu' && replyRoute.privatePost ? ['本轮输入来自主人在飞书私聊发送的富文本。按正文回答，保留链接文字和地址的对应关系；只看到链接不表示已读取目标页面。按正文的图片顺序对应本轮收到的画面。只描述实际提供的图片；单有媒体占位或视频标记时，不能据此推测画面。代码块用于展示原文，提及成员不表示要求通知对方。'] : []),
           ...(replyRoute?.channel === 'feishu' ? ['本轮回复渠道是飞书。引用工作台消息时使用可读出处。'] : []),
@@ -1412,4 +1417,22 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (infrastructureErrors.length) throw new AggregateError(infrastructureErrors, '消息持久化或事件发布失败。');
     },
   };
+}
+
+const AUTOMATION_KINDS:Record<string,string> = {question:'Agent 提问',permission:'权限审批',plan:'计划审批',review:'结果检查'};
+const AUTOMATION_HANDLERS:Record<string,string> = {user:'主人',main_agent:'主 Agent',supervisor:'自动跟进 Agent',rules:'固定回答'};
+const AUTOMATION_MODES:Record<string,string> = {auto:'直接处理',suggest:'只给建议',off:'不处理'};
+
+export type AutomationPolicy = {
+  rules: { kind: string; handler: string; mode?: string; cwdUnder?: string }[];
+}
+
+/** The owner's automation rules in words, so the model knows which approvals wait for a person. */
+export function describeAutomation(policy:AutomationPolicy):string {
+  const rules = policy.rules.map(rule => {
+    const scope = rule.cwdUnder ? '，仅当工作目录在 '+rule.cwdUnder+' 内' : '';
+    return '当出现' + (AUTOMATION_KINDS[rule.kind] ?? rule.kind) + scope + '时，由' + (AUTOMATION_HANDLERS[rule.handler] ?? rule.handler)
+      + (rule.mode === 'off' ? '不处理' : (AUTOMATION_MODES[rule.mode ?? 'suggest'] ?? '只给建议'));
+  });
+  return '主人给当前范围设了自动处理规则，列出的事按下面的归属处理：' + rules.join('；') + '。没列出的事仍按默认边界交给主人。规则只决定谁来处理，不扩大工具权限，也不授权对外发消息、删除或花钱。';
 }
