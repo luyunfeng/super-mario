@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
-import { GhError, createGithubCommentStore, createGithubNode, ghAccount, ghChecks, ghComment, ghComments, ghDiff, ghIssue, ghNotifications, ghSearch, repositoryOf, runGh, type GhRun } from '../plugins/github-node.ts';
+import { GhError, createGithubCommentStore, createGithubNode, ghAccount, ghChecks, ghCiState, ghComment, ghComments, ghDiff, ghIssue, ghNotifications, ghSearch, repositoryOf, runGh, type GhRun } from '../plugins/github-node.ts';
 
 const account = { login: 'octocat', name: 'The Octocat', id: 1, type: 'User' };
 const page = (items: unknown[]) => JSON.stringify(items);
@@ -254,6 +254,55 @@ test('评论处理器只在执行机有数据目录时提供，并拒绝无效�
       assert.equal(result.reason, 'bad_response');
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('CI 跟进：合并或关闭的合并请求、后来成功、分支删除都结束跟进', async () => {
+  const signal = new AbortController().signal;
+  const runs = (list: unknown[]) => async (args: string[]): Promise<string> => {
+    const path = args.at(-1)!;
+    if (path === 'repos/o/r/pulls/5') return JSON.stringify({ state: 'open', merged: false });
+    if (path.startsWith('repos/o/r/actions/runs?')) return JSON.stringify({ workflow_runs: list });
+    if (path === 'repos/o/r/branches/fix') return JSON.stringify({ name: 'fix' });
+    throw new Error('unexpected ' + path);
+  };
+  const runOf = (workflow: string, status: string, conclusion: string, at: string) =>
+    ({ name: workflow, status, conclusion, updated_at: at });
+  // Each workflow stands where its newest completed run left it.
+  assert.deepEqual(await ghCiState(runs([runOf('build', 'completed', 'success', '2026-11-02T00:00:00Z')]), signal, 'o/r', 'fix', 5), { over: 'passed' });
+  assert.deepEqual(await ghCiState(runs([runOf('build', 'completed', 'success', '2026-11-02T00:00:00Z'), runOf('test', 'completed', 'failure', '2026-11-02T00:00:00Z')]), signal, 'o/r', 'fix'),
+    { over: '', failed: { workflow: 'test', at: '2026-11-02T00:00:00Z' } });
+  // A run still going, cancelled or skipped settles nothing, so the branch has not recovered.
+  assert.deepEqual(await ghCiState(runs([runOf('build', 'in_progress', '', '2026-11-02T00:00:00Z')]), signal, 'o/r', 'fix'), { over: '', failed: null });
+  // The newest completed run of a workflow is the one that counts.
+  assert.deepEqual(await ghCiState(runs([runOf('build', 'completed', 'success', '2026-11-03T00:00:00Z'), runOf('build', 'completed', 'failure', '2026-11-02T00:00:00Z')]), signal, 'o/r', 'fix'), { over: 'passed' });
+  assert.deepEqual(await ghCiState(runs([runOf('build', 'completed', 'timed_out', '2026-11-03T00:00:00Z')]), signal, 'o/r', 'fix'),
+    { over: '', failed: { workflow: 'build', at: '2026-11-03T00:00:00Z' } });
+  const closed = async (args: string[]) => args.at(-1) === 'repos/o/r/pulls/5' ? JSON.stringify({ state: 'closed', merged: false }) : runs([])(args);
+  assert.deepEqual(await ghCiState(closed, signal, 'o/r', 'fix', 5), { over: 'closed' });
+  const merged = async (args: string[]) => args.at(-1) === 'repos/o/r/pulls/5' ? JSON.stringify({ state: 'closed', merged: true }) : runs([])(args);
+  assert.deepEqual(await ghCiState(merged, signal, 'o/r', 'fix', 5), { over: 'merged' });
+  const deleted = async (args: string[]) => { if (args.at(-1) === 'repos/o/r/branches/fix') throw new GhError('not_found'); return runs([])(args); };
+  assert.deepEqual(await ghCiState(deleted, signal, 'o/r', 'fix'), { over: 'deleted' });
+  // Another failure while reading the branch is reported, not read as a deleted branch.
+  const broken = async (args: string[]) => { if (args.at(-1) === 'repos/o/r/branches/fix') throw new GhError('failed'); return runs([])(args); };
+  await assert.rejects(ghCiState(broken, signal, 'o/r', 'fix'), isGhError('failed'));
+  for (const branch of ['', '-fix', 'a..b', 'a b?', 'x/y#z', 'a\\b', 'a[b']) {
+    await assert.rejects(ghCiState(runs([]), signal, 'o/r', branch), isGhError('bad_response'));
+  }
+});
+
+test('gh 报 404 归为找不到；未登录的提示里即使有 not found 也归为未登录', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-gh-notfound-'));
+  const saved = process.env.PATH;
+  t.after(async () => { process.env.PATH = saved; await rm(dir, { recursive: true, force: true }); });
+  const kindOf = async (stderr: string) => {
+    await writeFile(join(dir, 'gh'), '#!/bin/sh\nprintf %s ' + JSON.stringify(stderr) + ' >&2\nexit 1\n', { mode: 0o755 });
+    process.env.PATH = dir;
+    try { await runGh(['api', 'user'], { signal: new AbortController().signal, timeout: 5_000 }); return 'resolved'; }
+    catch (error) { assert.ok(error instanceof GhError); return error.kind; }
+  };
+  assert.equal(await kindOf('HTTP 404: Not Found (https://api.github.com/repos/o/r/branches/gone)'), 'not_found');
+  assert.equal(await kindOf('gh: You are not currently logged in. The account was not found. To log in, run: gh auth login'), 'not_signed_in');
 });
 
 test('环境里的令牌不传给 gh，gh 只用主人登录的账号', async t => {

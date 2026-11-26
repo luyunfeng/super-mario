@@ -11,11 +11,12 @@ type Row = Record<string, unknown>;
 
 /** Why a read could not be done. Only these fixed reasons reach the server, never CLI output. */
 export class GhError extends Error {
-  readonly kind: 'not_installed' | 'not_signed_in' | 'forbidden' | 'rate_limited' | 'failed' | 'timeout' | 'bad_response';
+  readonly kind: 'not_installed' | 'not_signed_in' | 'forbidden' | 'not_found' | 'rate_limited' | 'failed' | 'timeout' | 'bad_response';
   readonly retryAfterSeconds?: number;
   constructor(kind: GhError['kind'], retryAfterSeconds?: number) {
     super({ not_installed: '这台电脑没有安装 gh。', not_signed_in: '这台电脑的 gh 尚未登录 GitHub。',
-      forbidden: '当前 GitHub 登录没有读取该内容的权限。', rate_limited: 'GitHub 请求过多，请稍后再试。',
+      forbidden: '当前 GitHub 登录没有读取该内容的权限。', not_found: '找不到这个仓库、议题或分支，或它未向当前登录开放。',
+      rate_limited: 'GitHub 请求过多，请稍后再试。',
       failed: '读取 GitHub 失败。', timeout: '读取 GitHub 超时。', bad_response: 'GitHub 返回的数据格式不符合预期。' }[kind]);
     this.name = 'GhError';
     this.kind = kind;
@@ -48,7 +49,10 @@ export const runGh: GhRun = (args, options) => new Promise((resolve, reject) => 
       // and extra detail on the line, such as a token or a URL, must not hide the reason.
       if (/rate limit|secondary rate|abuse detection/i.test(text)) return reject(new GhError('rate_limited'));
       if (/\b403\b|forbidden|resource not accessible/i.test(text)) return reject(new GhError('forbidden'));
+      // Signed out comes before "not found": without an account every resource is not found,
+      // and the thing to fix is the sign-in.
       if (/log(?:ged)? in|auth login|authentication token|no account|not authenticated/i.test(text)) return reject(new GhError('not_signed_in'));
+      if (/\b404\b|not found/i.test(text)) return reject(new GhError('not_found'));
       return reject(new GhError('failed'));
     }
     resolve(String(stdout ?? ''));
@@ -336,6 +340,58 @@ export async function ghComment(run: GhRun, comments: GithubCommentStore, signal
   return { state: 'sent', url };
 }
 
+/** How a branch's continuous integration stands now, for following up a failure. */
+export type GhCiState =
+  | { over: 'merged' | 'closed' | 'deleted' | 'passed' }
+  | { over: ''; failed: { workflow: string; at: string } | null };
+
+/** A branch name as GitHub accepts it in a path. Odd names are refused, not escaped. */
+function branchOf(value: string): string {
+  if (!value || value.length > 250 || /[\x00-\x1f\x7f?#\[\\]/.test(value) || value.startsWith('-') || value.includes('..') || /{@/.test(value)) throw new GhError('bad_response');
+  return value;
+}
+
+/**
+ * The rules are the reference connector's. A merged or closed pull request ends the follow-up.
+ * Each workflow stands where its newest completed run left it. If some workflow settled and
+ * none failed, the branch recovered. A newer failure than the one already shown is news.
+ */
+export async function ghCiState(run: GhRun, signal: AbortSignal, repository: string, branch: string, pull?: number): Promise<GhCiState> {
+  const repo = repositoryOf(repository);
+  const name = branchOf(branch);
+  if (pull !== undefined && (!Number.isSafeInteger(pull) || pull < 1 || pull > 10_000_000)) throw new GhError('bad_response');
+  if (pull !== undefined) {
+    const pr = (await json(run, 'repos/' + repo + '/pulls/' + pull, signal)) as Row;
+    if (pr?.merged === true) return { over: 'merged' };
+    if (pr?.state === 'closed') return { over: 'closed' };
+  }
+  const runs = (await json(run, 'repos/' + repo + '/actions/runs?branch=' + encodeURIComponent(name) + '&per_page=20', signal)) as Row;
+  if (!runs || !Array.isArray(runs.workflow_runs)) throw new GhError('bad_response');
+  const settled = new Set<string>();
+  let failing = false;
+  let failed: { workflow: string; at: string } | null = null;
+  for (const entry of runs.workflow_runs) {
+    const row = object(entry);
+    const workflow = text(row?.name, 200), status = text(row?.status, 30), conclusion = text(row?.conclusion, 30), at = typeof row?.updated_at === 'string' ? row.updated_at : '';
+    if (!row || !workflow || settled.has(workflow) || status !== 'completed') continue;
+    if (conclusion === 'success') settled.add(workflow);
+    else if (['failure', 'timed_out', 'startup_failure'].includes(conclusion)) {
+      settled.add(workflow); failing = true;
+      if (at && (!failed || Date.parse(at) > Date.parse(failed.at))) failed = { workflow, at };
+    }
+  }
+  if (settled.size > 0 && !failing) return { over: 'passed' };
+  signal.throwIfAborted();
+  try { await run(['api', '--method', 'GET', 'repos/' + repo + '/branches/' + encodeURIComponent(name)], { signal }); }
+  catch (error) {
+    // A branch that is gone ends the follow-up. gh names the missing branch in its own words.
+    if (error instanceof GhError && error.kind === 'not_found') return { over: 'deleted' };
+    if (error instanceof GhError) throw error;
+    throw new GhError('failed');
+  }
+  return { over: '', failed };
+}
+
 function only(input: Row, allowed: string[]): void {
   if (Object.keys(input).some(key => !allowed.includes(key))) throw new GhError('bad_response');
 }
@@ -398,6 +454,13 @@ export function createGithubNode(options: { run?: GhRun; dataDir?: string } = {}
       only(input, ['repository', 'number']);
       if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
       return ghChecks(run, uncancelled, input.repository, input.number);
+    }),
+    'github.ci-state': async params => reply(async () => {
+      const input = object(params) ?? {};
+      only(input, ['repository', 'branch', 'pull']);
+      if (typeof input.repository !== 'string' || typeof input.branch !== 'string') throw new GhError('bad_response');
+      if (input.pull !== undefined && typeof input.pull !== 'number') throw new GhError('bad_response');
+      return ghCiState(run, uncancelled, input.repository, input.branch, input.pull);
     }),
     ...(comments ? {
       'github.comment': async (params: JsonObject) => reply(async () => {
