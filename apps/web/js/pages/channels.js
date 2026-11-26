@@ -9,6 +9,7 @@ import { createPersonalMessagesUI } from '../features/personal-messages.js';
 import { createBotMailboxesUI } from '../legacy/bot-mailboxes.js';
 import { createGithubChannel } from '../features/github-channel.js';
 import { createMailChannel } from '../features/mail-channel.js';
+import { createSentLedgerUI } from '../features/sent-ledger.js';
 import { systemText } from '../copy/terms.js';
 
 const JOB_LABELS = { queued: '准备中', waiting_for_scan: '等待扫码', creating_app: '创建中', configuring: '配置中', publishing: '发布中', verifying: '核验中', completed: '机器人已创建', needs_configuration: '需要完成配置', failed: '创建失败', unknown: '结果未知', cancelled: '已取消', expired: '二维码已过期' };
@@ -39,6 +40,7 @@ export function createChannelsPage({ api, store, router, shell }) {
   const botCard = Card({ title: '飞书机器人', hint: 'channel.bot', id: 'channel-bot', body: wizard });
   const github = createGithubChannel({ api, store });
   const mail = createMailChannel({ api, store });
+  const sent = createSentLedgerUI({ api });
 
   function step(number, title, done, content) {
     return h('li', { class: `wstep ${done ? 'is-done' : ''}`, dataset: { step: number, done: String(done) } },
@@ -261,11 +263,11 @@ export function createChannelsPage({ api, store, router, shell }) {
         h('div', { class: 'page__title' }, h('h1', null, '渠道'), h('p', { class: 'page__sub' }, hintCopy('nav.channels').tag)),
         h('div', { class: 'page__actions' }, Hint('nav.channels'))),
       problemBox, h('div', { class: 'stack stack--lg' }, botCard, h('p', { class: 'small muted' }, '两种接入方式可独立启停，也可同时使用。同一飞书账号建议只开启一种。'),
-        h('div', { class: 'channel-gateways' }, collectCard, webCard), github.el, mail.el, advanced)));
+        h('div', { class: 'channel-gateways' }, collectCard, webCard), github.el, mail.el, sent.el, advanced)));
 
   async function load() {
     const stamp = ++seq;
-    const results = await Promise.allSettled([api.get('/feishu/bots'), personal.refresh(), api.get('/feishu/registrations'), github.load(), mail.load()]);
+    const results = await Promise.allSettled([api.get('/feishu/bots'), personal.refresh(), api.get('/feishu/registrations'), github.load(), mail.load(), sent.load()]);
     if (stamp !== seq) return;
     if (results[0].status === 'fulfilled') bots = results[0].value;
     if (results[2].status === 'fulfilled') {

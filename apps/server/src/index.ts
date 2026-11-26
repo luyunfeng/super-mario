@@ -527,6 +527,19 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method === 'POST') return json(res,200,await gateway.commandGroup.sync(await body(req)));
         }
         if (path === '/api/v1/github/connector' && method === 'GET') return json(res, 200, app.githubView());
+        // What went out in the owner's name, newest first. A read: nothing here sends.
+        if (path === '/api/v1/sent' && method === 'GET') {
+          const names = ['connector', 'limit', 'after_at', 'after_id'];
+          for (const key of url.searchParams.keys()) if (!names.includes(key)) throw new InputError('这条接口不接受参数 ' + key);
+          const single = (name: string) => { const values = url.searchParams.getAll(name); if (values.length > 1) throw new InputError('参数 ' + name + ' 只能有一个'); return values[0]; };
+          const connector = single('connector'), limit = single('limit'), afterAt = single('after_at'), afterId = single('after_id');
+          if ((afterAt === undefined) !== (afterId === undefined)) throw new InputError('继续位置需要时间和编号两项');
+          return json(res, 200, app.readSent({
+            ...(connector !== undefined ? { connector } : {}),
+            ...(limit !== undefined ? { limit } : {}),
+            ...(afterAt !== undefined && afterId !== undefined ? { after: { at: afterAt, id: afterId } } : {}),
+          }));
+        }
         if (path === '/api/v1/mail/preset' && method === 'GET') {
           const email = url.searchParams.get('email') ?? '';
           if (url.searchParams.size > 1 || (url.searchParams.size === 1 && !url.searchParams.has('email'))) throw new InputError('只接受 email 参数');

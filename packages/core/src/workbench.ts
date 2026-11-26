@@ -55,6 +55,7 @@ import { classifyImapError, connectionOptions, ImapError, libraryOpen, setMessag
 import { MessageError, readAttachment, readMessage } from './mail-message.ts';
 import { searchFolder } from './mail-search.ts';
 import { createAttachmentClaims } from './mail-attachment-claims.ts';
+import { createSentLedger, SENT_CONNECTORS, SENT_MAX, type SentConnector } from './sent-ledger.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -642,6 +643,9 @@ export async function createWorkbench(config: AppConfig) {
   // The bytes of an attachment being saved on a machine are held here for the moment of the
   // save. The machine channel carries small messages, so the machine takes them over HTTP.
   const attachmentClaims = createAttachmentClaims();
+  // What went out in the owner's name, read from the outbox and the approvals. It holds
+  // nothing of its own.
+  const sentLedger = createSentLedger({ store });
   /** One call from the assistant's mail tools. Each goes to what does it, so the tool
    *  checks the input and the workbench does the reading or asks for the approval. */
   async function mailTool(name: 'accounts' | 'search' | 'read' | 'send' | 'save-attachment', input: Record<string, unknown>, signal: AbortSignal): Promise<Json> {
@@ -700,6 +704,25 @@ export async function createWorkbench(config: AppConfig) {
    *  machine it was made for, and for a short time. */
   function takeMailAttachment(id: string, token: string, machineId: string) {
     return attachmentClaims.take(id, token, machineId);
+  }
+  /** One page of what went out in the owner's name. The page sends only the filter and the
+   *  position, so nothing of the records is read from the request. */
+  function readSent(input: Record<string, unknown>) {
+    const connector = input.connector;
+    if (connector !== undefined && !SENT_CONNECTORS.includes(connector as SentConnector)) throw new InputError('连接器无效');
+    const limit = input.limit === undefined ? undefined : Number(input.limit);
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > SENT_MAX)) throw new InputError('条数须为 1 至 ' + SENT_MAX + ' 的整数');
+    const position = input.after;
+    if (position !== undefined && (!isPosition(position))) throw new InputError('继续位置无效');
+    return sentLedger.read({
+      ...(connector !== undefined ? { connector: connector as SentConnector } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(position ? { after: position } : {}),
+    });
+  }
+  /** Whether a request names a position in the ledger: a time and an id, and nothing else. */
+  function isPosition(value: unknown): value is { at: string; id: string } {
+    return !!value && typeof value === 'object' && !Array.isArray(value) && typeof (value as { at?: unknown }).at === 'string' && typeof (value as { id?: unknown }).id === 'string';
   }
   // An email the assistant asks to send is an approval. Nothing goes out until the owner
   // approves it, and what goes out is read back from the approval when they do.
@@ -3713,7 +3736,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, takeMailAttachment, proposeMail, MAIL_SEND_APPROVAL,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, takeMailAttachment, proposeMail, MAIL_SEND_APPROVAL, readSent,
     mailConnectorView, mailConnectorConfigure, mailPoll: async () => { await plugins.invocations.use(MAIL_POLL_SERVICE, {}); },
     mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
