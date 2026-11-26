@@ -596,6 +596,13 @@ export async function createWorkbench(config: AppConfig) {
       }
       return retired;
     },
+    githubClose: (thread, reason) => {
+      // The connector ends a follow-up by closing the item, the way the owner's archive does.
+      const source = 'github:' + (githubState().login ?? '').toLowerCase();
+      const item = inbox.list().find(entry => entry.source === source && entry.thread === thread && !entry.archivedAt);
+      if (!item) return false;
+      return inbox.closeByConnector(item.id, reason);
+    },
   });
   plugins.register(githubConnector);
   function githubView() {

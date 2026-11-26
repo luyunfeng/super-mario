@@ -105,3 +105,40 @@ test('GitHub 正文读取：只接受 GitHub 条目，未选电脑或换账号�
   await server.app.githubPoll();
   await assert.rejects(server.app.githubRead(item.id), /此前的 GitHub 账号/);
 });
+
+test('GitHub CI 跟进：失败通知进入收件箱，分支恢复后归档并写明原因', { timeout: 60_000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-github-ci-'));
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: join(dir, 'data'), demo: true, token: 'offline-github-ci' });
+  let recovered = false;
+  const node = startAgentNode({ url: server.url, token: 'offline-github-ci', machineId: 'ci-machine', name: '开发机', dataDir: join(dir, 'node'),
+    handlers: createGithubNode({ run: async args => {
+      const path = args.at(-1)!;
+      if (path === 'user') return JSON.stringify({ login: 'octocat', name: '' });
+      if (path.startsWith('notifications?')) return JSON.stringify(recovered ? [] : [{ id: '900', reason: 'ci_activity', updated_at: '2026-11-20T08:00:00Z',
+        subject: { title: 'Build and test failed for main branch', type: 'CheckSuite' }, repository: { full_name: 'octo/widgets' } }]);
+      if (path.startsWith('repos/octo/widgets/actions/runs?')) return JSON.stringify({ workflow_runs: recovered
+        ? [{ name: 'Build and test', status: 'completed', conclusion: 'success', updated_at: '2026-11-21T00:00:00Z' }]
+        : [{ name: 'Build and test', status: 'completed', conclusion: 'failure', updated_at: '2026-11-20T08:00:00Z' }] });
+      if (path === 'repos/octo/widgets/branches/main') return JSON.stringify({ name: 'main' });
+      throw new Error('unexpected ' + path);
+    } }) as never });
+  t.after(async () => { await node.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
+  await waitFor(() => server.machines.list().some(machine => machine.capabilities.includes('github.ci-state')), 'the machine to offer the CI read');
+  server.app.store.put('github.connector', 'state', { machineId: 'ci-machine', enabled: true });
+  await server.app.githubPoll();
+  const item = server.app.inbox.list().find(entry => entry.thread === 'ci:octo/widgets@main')!;
+  assert.ok(item, 'the failed run reached the inbox');
+  assert.equal(item.title, 'widgets · main 的 CI 失败');
+  assert.deepEqual(item.origin?.githubCi, { repository: 'octo/widgets', branch: 'main', workflow: 'Build and test' });
+  assert.ok(server.app.store.get<{ ci: Record<string, unknown> }>('github.connector', 'state')!.ci['ci:octo/widgets@main'], 'the branch is followed');
+
+  // The branch recovers. The next read closes the item and says why.
+  recovered = true;
+  server.app.store.put('github.connector', 'state', { ...server.app.store.get('github.connector', 'state') as object, ci: { 'ci:octo/widgets@main': {
+    repository: 'octo/widgets', branch: 'main', workflow: 'Build and test', failedAt: '2026-11-20T08:00:00Z' } } } as never);
+  await server.app.githubPoll();
+  const closed = server.app.inbox.list().find(entry => entry.id === item.id)!;
+  assert.ok(closed.archivedAt, 'the item is closed');
+  assert.equal(closed.reason, 'GitHub：后来成功了');
+  assert.equal(server.app.store.get<{ ci: Record<string, unknown> }>('github.connector', 'state')!.ci['ci:octo/widgets@main'], undefined, 'the branch is no longer followed');
+});

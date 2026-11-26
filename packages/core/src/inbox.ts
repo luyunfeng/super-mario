@@ -80,6 +80,9 @@ export function createInboxService({ store, events, createTodo, triage }: {
   retryPending(): Promise<void>;
   confirm(id: string, version: number, details?: { title: string; notes: string }): { todoId: string };
   archive(id: string, version: number): void;
+  /** A connector closes an item because its source moved on. The reason is the connector's,
+   *  and is not described as something the owner did. */
+  closeByConnector(id: string, reason: string): boolean;
   bulk(input: Record<string,unknown>): {updated:number;created?:{id:string;todoId:string}[]};
   assignProject(id: string, version: number, projectId?: string): InboxItem;
   reopen(id: string): void;
@@ -391,6 +394,16 @@ export function createInboxService({ store, events, createTodo, triage }: {
     archive(id, version) {
       store.transaction(()=>writeArchiveState(current(id,version),'archive',new Date().toISOString()));
       changed(id);
+    },
+    closeByConnector(id, reason) {
+      required(id, 'id'); required(reason, '原因');
+      const item = store.get<InboxItem>(collection, id);
+      // Already closed, or already turned into a todo: the owner's decision stands.
+      if (!item || item.archivedAt || item.todoId) return false;
+      const now = new Date().toISOString();
+      store.put(collection, id, { ...item, reason, archivedAt: now, version: item.version + 1, updatedAt: now });
+      changed(id);
+      return true;
     },
     bulk(input) {
       const {action,items}=input;

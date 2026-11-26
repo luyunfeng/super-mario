@@ -34,6 +34,15 @@ export function normalizeInboxOrigin(value: unknown): InboxOrigin | undefined {
         (github.kind !== 'issues' && github.kind !== 'pull')) return fail();
     result.github = { repository: github.repository, number: github.number, kind: github.kind };
   }
+  if (input.githubCi !== undefined) {
+    const ci = input.githubCi as Record<string, unknown> | null;
+    if (result.connector !== 'GitHub' || !ci || typeof ci.repository !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(ci.repository) ||
+        typeof ci.branch !== 'string' || !ci.branch || ci.branch.length > 250 || /[\u0000-\u001f\u007f]/.test(ci.branch) ||
+        typeof ci.workflow !== 'string' || !ci.workflow || ci.workflow.length > 200 ||
+        (ci.pull !== undefined && (typeof ci.pull !== 'number' || !Number.isSafeInteger(ci.pull) || ci.pull < 1))) return fail();
+    result.githubCi = { repository: ci.repository, branch: ci.branch, workflow: ci.workflow, ...(typeof ci.pull === 'number' ? { pull: ci.pull } : {}) };
+  }
   if (result.kind === 'group' && result.connector === '飞书' && input.personalGroupUserCount !== undefined) {
     const count = input.personalGroupUserCount;
     if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) return fail();

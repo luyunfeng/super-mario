@@ -22,6 +22,9 @@ export interface InboxOrigin {
   /** A GitHub notification of one pull request or issue. The link is built from this, never
    *  taken from the API, so it always points at github.com/<repository>/<kind>/<number>. */
   github?: { repository: string; number: number; kind: 'issues' | 'pull' };
+  /** A GitHub notification that a branch's continuous integration failed. Followed until the
+   *  branch recovers, the branch is deleted, or the pull request is merged or closed. */
+  githubCi?: { repository: string; branch: string; workflow: string; pull?: number };
 }
 
 export function excludesPersonalGroupFromAutomation(origin?: InboxOrigin): boolean {

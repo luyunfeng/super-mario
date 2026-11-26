@@ -13,6 +13,8 @@ export interface GithubConnectorState {
   login?: string;
   /** Counts the changes of login. A read that began under an earlier epoch is discarded. */
   epoch?: number;
+  /** Failed continuous integration to follow up, keyed by thread. */
+  ci?: Record<string, { repository: string; branch: string; workflow: string; pull?: number; failedAt?: string; checkedAt?: string }>;
   lastRunAt?: string;
   lastError?: string;
 }
@@ -25,6 +27,8 @@ export interface GithubConnectorActions {
   githubSave(state: GithubConnectorState): void;
   /** Closes the open inbox items of an account that is no longer the one being read. */
   githubRetire(login: string): number;
+  /** Closes one inbox item of the account being read, with the reason. */
+  githubClose(thread: string, reason: string): boolean;
 }
 
 export type GithubNotification = {
@@ -44,12 +48,33 @@ const reasons: Record<string, string> = {
   invitation: '有人邀请你加入仓库或团队。',
 };
 
+/** GitHub titles a failed run "<workflow> failed for <branch> branch", sometimes with a count. */
+const ciTitle = /^(.+?)\s+(?:failed|timed out|failure)\s+for\s+(\S+)\s+branch(?:\s*·\s*\d+)?$/i;
+/** How long to wait before asking GitHub again about the same branch. */
+const CI_RECHECK_MS = 10 * 60 * 1000;
+
 /**
  * A notification as one inbox thing. The thread is the pull request or issue, so a later
  * notification about the same one updates the item instead of opening another. A notification
  * without a number names no pull request or issue, and is left out.
  */
 export function githubThing(notification: GithubNotification): InboxThing | undefined {
+  if (notification.reason === 'ci_activity') {
+    const match = ciTitle.exec(notification.subject.title.trim());
+    if (!match) return undefined;
+    const repository = notification.repository;
+    const number = notification.subject.number;
+    return {
+      // One item for a repository's branch. A rerun and a later failure join it.
+      thread: 'ci:' + repository.toLowerCase() + '@' + match[2]!,
+      last: notification.id,
+      title: repository.split('/')[1] + ' · ' + match[2] + ' 的 CI 失败',
+      text: match[1] + ' 在分支 ' + match[2] + ' 上失败。',
+      receivedAt: notification.updatedAt,
+      origin: { kind: 'direct', connector: 'GitHub', senderName: notification.reason,
+        githubCi: { repository, branch: match[2]!, workflow: match[1]!, ...(number ? { pull: number } : {}) } },
+    };
+  }
   const number = notification.subject.number;
   if (!number) return undefined;
   const pull = notification.subject.type === 'PullRequest';
@@ -101,8 +126,64 @@ async function run(actions: GithubConnectorActions): Promise<void> {
     if (!after.enabled || after.machineId !== machineId || after.epoch !== epoch || !sameLogin(after.login, login)) return;
     const things = reply.data.items.flatMap(item => { const thing = githubThing(item); return thing ? [thing] : []; });
     if (things.length) await actions.githubIngest(things);
+    // A failed run is followed from now on. Its thread is the branch, so a rerun joins it.
+    const ci = { ...(actions.githubState().ci ?? {}) };
+    for (const thing of things) {
+      const target = thing.origin?.githubCi;
+      if (target) ci[thing.thread] = { repository: target.repository, branch: target.branch, workflow: target.workflow,
+        ...(target.pull ? { pull: target.pull } : {}), failedAt: thing.receivedAt ?? '', checkedAt: new Date().toISOString() };
+    }
+    actions.githubSave({ ...actions.githubState(), ci });
+    await followUpCi(actions, machineId, login, epoch);
   } catch (error) { fail(error); }
 }
+
+/**
+ * GitHub notifies only the account that started a run, so a later failure on the same branch
+ * arrives as no notification at all. The open CI items are asked about again from time to time.
+ * The branch recovering, being deleted, or its pull request closing ends the item.
+ */
+async function followUpCi(actions: GithubConnectorActions, machineId: string, login: string, epoch: number) {
+  const state = actions.githubState();
+  const now = Date.now();
+  const due = Object.entries(state.ci ?? {}).filter(([, item]) => !item.checkedAt || now - Date.parse(item.checkedAt) >= CI_RECHECK_MS)
+    .sort(([a], [b]) => a.localeCompare(b)).slice(0, 5);
+  for (const [thread, item] of due) {
+    const current = actions.githubState();
+    // The account or the machine may have changed while earlier items were being checked.
+    if (!current.enabled || current.machineId !== machineId || current.epoch !== epoch || current.login?.toLowerCase() !== login.toLowerCase()) return;
+    const reply = await actions.githubCall(machineId, 'github.ci-state', { repository: item.repository, branch: item.branch, ...(item.pull ? { pull: item.pull } : {}) }) as unknown as Reply<GhCiState>;
+    if (!reply.ok) {
+      // A missing branch is the one failure that ends the follow-up. The machine reports it as not found.
+      if (reply.reason !== 'not_found') continue;
+    }
+    const after = actions.githubState();
+    if (!after.enabled || after.machineId !== machineId || after.epoch !== epoch || after.login?.toLowerCase() !== login.toLowerCase()) return;
+    const latest = after.ci?.[thread];
+    if (!latest) continue;
+    const checkedAt = new Date().toISOString();
+    const ci = { ...after.ci, [thread]: { ...latest, checkedAt } };
+    const result = reply.ok ? reply.data : { over: 'deleted' as const };
+    if (result.over) {
+      const why = { merged: 'GitHub：合并请求已合并', closed: 'GitHub：合并请求已关闭', deleted: 'GitHub：分支已删除', passed: 'GitHub：后来成功了' }[result.over];
+      actions.githubClose(thread, why);
+      delete ci[thread];
+    } else if (result.failed && (!latest.failedAt || Date.parse(result.failed.at) > Date.parse(latest.failedAt))) {
+      // A newer failure is news GitHub sent no notification for. The item is ingested again
+      // under the same thread, which updates it and keeps what the owner already decided.
+      await actions.githubIngest([{
+        thread, last: 'ci:' + result.failed.at, title: item.repository.split('/')[1] + ' · ' + item.branch + ' 的 CI 失败',
+        text: result.failed.workflow + ' 在分支 ' + item.branch + ' 上失败，最近一次 ' + new Date(result.failed.at).toISOString() + '。',
+        origin: { kind: 'direct', connector: 'GitHub', senderName: 'ci_activity',
+          githubCi: { repository: item.repository, branch: item.branch, workflow: result.failed.workflow, ...(item.pull ? { pull: item.pull } : {}) } },
+      }]);
+      ci[thread] = { ...latest, failedAt: result.failed.at, workflow: result.failed.workflow, checkedAt };
+    }
+    actions.githubSave({ ...actions.githubState(), ci });
+  }
+}
+
+type GhCiState = { over: 'merged' | 'closed' | 'deleted' | 'passed' } | { over: ''; failed: { workflow: string; at: string } | null };
 
 /** The connector as a plugin, with one read made available to its host. */
 export type GithubConnectorExtension = Extension & { poll(): Promise<void> };

@@ -12,17 +12,21 @@ function fixture(initial: GithubConnectorState) {
   let state = initial;
   const ingested: InboxThing[][] = [];
   const retired: string[] = [];
+  const closed: { thread: string; reason: string }[] = [];
   const calls: { machineId: string; method: string }[] = [];
   let login = 'octocat';
   let failAccount: string | undefined;
   let failNotifications: string | undefined;
   let items: GithubNotification[] = [notification()];
+  let ciState: unknown = { over: '', failed: null };
+  let ciReason: string | undefined;
   const machines: GithubMachine[] = [{ id: 'm1', name: '开发机', online: true, capabilities: ['github.account', 'github.notifications'] }];
   const actions: GithubConnectorActions = {
     async githubCall(machineId, method) {
       calls.push({ machineId, method });
       if (method === 'github.account') return (failAccount ? { ok: false, reason: 'not_signed_in', message: failAccount } : { ok: true, data: { login } }) as Json;
       if (method === 'github.notifications') return (failNotifications ? { ok: false, reason: 'rate_limited', message: failNotifications } : { ok: true, data: { items, hasNext: false } }) as Json;
+      if (method === 'github.ci-state') return (ciReason ? { ok: false, reason: ciReason, message: 'x' } : { ok: true, data: ciState }) as Json;
       throw new Error('unexpected method ' + method);
     },
     githubMachines: () => machines,
@@ -30,8 +34,10 @@ function fixture(initial: GithubConnectorState) {
     githubState: () => state,
     githubSave(next) { state = next; },
     githubRetire(name) { retired.push(name); return 2; },
+    githubClose(thread, reason) { closed.push({ thread, reason }); return true; },
   };
   return { actions, ingested, retired, calls, setLogin: (value: string) => { login = value; }, setItems: (value: GithubNotification[]) => { items = value; },
+    closed, setCiState: (value: unknown) => { ciState = value; }, failCi: (reason?: string) => { ciReason = reason; },
     failAccount: (message?: string) => { failAccount = message; }, failNotifications: (message?: string) => { failNotifications = message; }, state: () => state };
 }
 
@@ -117,4 +123,95 @@ test('通知读取失败只记原因，下次轮询继续；执行机关闭或�
   const before = f.calls.length;
   await poll(f.actions);
   assert.equal(f.calls.length, before);
+});
+
+const ciNotification = (id: string, at: string, title = 'Build and test failed for main branch'): GithubNotification => ({
+  id, reason: 'ci_activity', repository: 'octo/widgets', updatedAt: at, subject: { title, type: 'CheckSuite' },
+});
+
+test('CI 失败：一条通知成为按分支归并的条目，并登记为要跟进', async () => {
+  const thing = githubThing(ciNotification('600', '2026-11-20T08:00:00Z'))!;
+  assert.equal(thing.thread, 'ci:octo/widgets@main');
+  assert.equal(thing.title, 'widgets · main 的 CI 失败');
+  assert.deepEqual(thing.origin?.githubCi, { repository: 'octo/widgets', branch: 'main', workflow: 'Build and test' });
+  // A title that does not name a workflow and a branch is not a CI failure to follow.
+  assert.equal(githubThing(ciNotification('601', '2026-11-20T08:00:00Z', 'something else')), undefined);
+  const f = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0 });
+  f.setItems([ciNotification('600', '2026-11-20T08:00:00Z')]);
+  await poll(f.actions);
+  const followed = f.state().ci!['ci:octo/widgets@main']!;
+  assert.equal(followed.repository, 'octo/widgets');
+  assert.equal(followed.branch, 'main');
+  assert.equal(followed.failedAt, '2026-11-20T08:00:00Z');
+});
+
+test('CI 跟进：分支恢复、合并、关闭或删除后归档条目并停止跟进', async () => {
+  for (const [state, reason] of [
+    [{ over: 'passed', failed: null }, 'GitHub：后来成功了'],
+    [{ over: 'merged' }, 'GitHub：合并请求已合并'],
+    [{ over: 'closed' }, 'GitHub：合并请求已关闭'],
+    [{ over: 'deleted' }, 'GitHub：分支已删除'],
+  ] as const) {
+    const f = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0,
+      ci: { 'ci:octo/widgets@main': { repository: 'octo/widgets', branch: 'main', workflow: 'Build and test', failedAt: '2026-11-20T08:00:00Z' } } });
+    f.setCiState(state);
+    await poll(f.actions);
+    assert.deepEqual(f.closed, [{ thread: 'ci:octo/widgets@main', reason }], JSON.stringify(state));
+    assert.equal(f.state().ci!['ci:octo/widgets@main'], undefined, 'the branch is no longer followed');
+  }
+  // The machine reporting the branch as not found ends the follow-up in the same way.
+  const missing = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0,
+    ci: { 'ci:octo/widgets@main': { repository: 'octo/widgets', branch: 'main', workflow: 'Build and test', failedAt: '2026-11-20T08:00:00Z' } } });
+  missing.failCi('not_found');
+  await poll(missing.actions);
+  assert.deepEqual(missing.closed, [{ thread: 'ci:octo/widgets@main', reason: 'GitHub：分支已删除' }]);
+});
+
+test('CI 跟进：有更新的失败时更新同一条目；同一失败不重复；仍在失败且没有新失败时不动；读取失败留到下次', async () => {
+  const followed = { repository: 'octo/widgets', branch: 'main', workflow: 'Build and test', failedAt: '2026-11-20T08:00:00Z' };
+  // A newer failure is ingested under the same thread, so it updates the item the owner has.
+  const newer = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0, ci: { 'ci:octo/widgets@main': followed } });
+  newer.setItems([]);
+  newer.setCiState({ over: '', failed: { workflow: 'Build and test', at: '2026-11-21T09:00:00Z' } });
+  await poll(newer.actions);
+  assert.equal(newer.ingested.length, 1);
+  assert.equal(newer.ingested[0]![0]!.thread, 'ci:octo/widgets@main');
+  assert.equal(newer.ingested[0]![0]!.last, 'ci:2026-11-21T09:00:00Z');
+  assert.match(newer.ingested[0]![0]!.text, /Build and test 在分支 main 上失败/);
+  assert.equal(newer.state().ci!['ci:octo/widgets@main']!.failedAt, '2026-11-21T09:00:00Z');
+  assert.deepEqual(newer.closed, []);
+  // The failure already shown is not news, so the item is left alone.
+  const same = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0, ci: { 'ci:octo/widgets@main': followed } });
+  same.setItems([]);
+  same.setCiState({ over: '', failed: { workflow: 'Build and test', at: '2026-11-20T08:00:00Z' } });
+  await poll(same.actions);
+  assert.equal(same.ingested.length, 0);
+  assert.deepEqual(same.closed, []);
+  // Still failing with no settled workflow, or a read that failed: nothing changes yet.
+  const pending = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0, ci: { 'ci:octo/widgets@main': followed } });
+  pending.setItems([]);
+  pending.setCiState({ over: '', failed: null });
+  await poll(pending.actions);
+  assert.equal(pending.ingested.length, 0);
+  assert.deepEqual(pending.closed, []);
+  const failedRead = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0, ci: { 'ci:octo/widgets@main': followed } });
+  failedRead.setItems([]);
+  failedRead.failCi('rate_limited');
+  await poll(failedRead.actions);
+  assert.deepEqual(failedRead.closed, [], 'a failed read is not a deleted branch');
+  assert.ok(failedRead.state().ci!['ci:octo/widgets@main'], 'the branch is still followed');
+});
+
+test('CI 跟进：刚检查过的分支在间隔内不再检查，一次最多检查五个', async () => {
+  const entry = (branch: string) => ({ repository: 'octo/widgets', branch, workflow: 'Build and test', failedAt: '2026-11-20T08:00:00Z' });
+  const justChecked = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0,
+    ci: { 'ci:octo/widgets@main': { ...entry('main'), checkedAt: new Date().toISOString() } } });
+  await poll(justChecked.actions);
+  assert.equal(justChecked.calls.filter(call => call.method === 'github.ci-state').length, 0);
+  const many = fixture({ machineId: 'm1', enabled: true, login: 'octocat', epoch: 0,
+    ci: Object.fromEntries(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(branch => ['ci:octo/widgets@' + branch, entry(branch)])) });
+  many.setItems([]);
+  many.setCiState({ over: '', failed: null });
+  await poll(many.actions);
+  assert.equal(many.calls.filter(call => call.method === 'github.ci-state').length, 5);
 });
