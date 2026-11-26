@@ -161,6 +161,11 @@ test('agent CLI loads compiled modules, including guarded artifacts, and passes 
   `);
   await writeFile(join(dir, 'dist/plugins/cli-session-discovery.js'), `export function createCliSessionDiscovery() { return { handlers: { 'agents.sessions': async () => ({ sessions: [], roots: [], warnings: [], truncated: false }), 'agents.session': async () => ({}) }, validateResume: async () => ({}) }; }`);
   await writeFile(join(dir, 'dist/plugins/project-discovery.js'), `export function createProjectDiscovery() { return { handlers: { 'workspace.projects': async () => ({projects:[]}), 'workspace.directory': async () => ({}) } }; }`);
+  // node-plugins.ts also reads the office worker guide and machine skills. They carry no
+  // behaviour of their own here, but the compiled modules must exist to be loaded.
+  await mkdir(join(dir, 'dist/plugins/office'), { recursive: true });
+  await writeFile(join(dir, 'dist/plugins/office/guide.js'), `export const officeWorkerGuide = [];`);
+  await writeFile(join(dir, 'dist/plugins/machine-skills.js'), `export function createMachineSkills() { return { handlers: {}, close: async () => {} }; }`);
   await writeFile(join(dir, 'dist/plugins/executors.js'), `
     import { writeFile } from 'node:fs/promises';
     export function createExecutionServices({host, dataDir}) {
@@ -207,7 +212,7 @@ test('agent CLI loads compiled modules, including guarded artifacts, and passes 
     return output.includes('执行机代理已启动') || undefined;
   });
   const options = JSON.parse(await readFile(join(dir, 'options.json'), 'utf8'));
-  assert.deepEqual(options.handlers, ['terminal.live.list', 'terminal.host.start', 'executor.sessions', 'executor.diagnostics', 'extension.load', 'extension.status', 'extension.call', 'workspace.projects', 'workspace.directory', 'agents.sessions', 'agents.session']);
+  assert.deepEqual(options.handlers, ['office.guide', 'terminal.live.list', 'terminal.host.start', 'executor.sessions', 'executor.diagnostics', 'extension.load', 'extension.status', 'extension.call', 'workspace.projects', 'workspace.directory', 'agents.sessions', 'agents.session']);
   assert.deepEqual(options.executors, [{ id: 'compiled-test', machineId: options.machineId }]);
   assert.equal(options.onDisconnect, 'function');
   assert.equal(options.dataDir, dir);

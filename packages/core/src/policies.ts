@@ -83,11 +83,20 @@ export function validatePolicyPatch(patch: Partial<PolicyConfig>): void {
       }
       if ('reversible' in rule && typeof rule.reversible !== 'boolean') throw new TypeError('reversible必须为布尔值');
       if (rule.grantedAt !== undefined && !Number.isFinite(Date.parse(rule.grantedAt))) throw new TypeError('授权时间格式无效');
-      // A rule that hands an approval to an Agent must say why the owner allowed it.
-      if (rule.kind !== 'question' && rule.handler !== 'user' && rule.mode !== 'off' && !rule.note) throw new TypeError('放宽审批的规则必须填写授权说明');
       if (rule.handler === 'rules' && rule.mode === 'auto') text(rule.answer);
       if (rule.handler === 'user' && rule.mode === 'off') throw new TypeError('不能关闭最终用户处理阶段');
     }
+  }
+}
+
+/**
+ * A rule that hands an approval to an Agent must say why the owner allowed it. This is
+ * checked when a rule takes effect, not when one is drafted: a policy inside a plan is a
+ * draft until the owner approves the plan, and that approval is what supplies the reason.
+ */
+export function validatePolicyGrants(patch: Partial<PolicyConfig>): void {
+  for (const rule of patch.rules ?? []) {
+    if (rule.kind !== 'question' && rule.handler !== 'user' && rule.mode !== 'off' && !rule.note) throw new TypeError('放宽审批的规则必须填写授权说明');
   }
 }
 
@@ -125,6 +134,9 @@ export function createPolicies({ store, events }: { store: Store; events: EventB
     write(scope: PolicyScope, patch: Partial<PolicyConfig>, options: { notify?: boolean } = {}): PolicyConfig {
       const key = scopeKey(scope);
       validatePolicyPatch(patch);
+      // Only rules this write adds or changes need the owner's reason. Rules carried over
+      // unchanged were checked when they were saved.
+      validatePolicyGrants(patch);
       store.transaction(() => {
         const previous = store.get<Partial<PolicyConfig>>(collection, key) ?? {};
         validatePolicyPatch(previous);

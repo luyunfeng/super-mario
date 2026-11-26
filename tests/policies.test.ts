@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
-import { createPolicies, type PolicyRule } from '../packages/core/src/policies.ts';
+import { createPolicies, validatePolicyPatch, validatePolicyGrants, type PolicyRule } from '../packages/core/src/policies.ts';
 
 function fixture(t: { after(fn: () => void): void }) {
   const store = createStore(':memory:');
@@ -44,7 +44,8 @@ test('defaults are conservative; auto requires explicit mode and rules auto need
       userDeadlineAt:'2026-01-01T00:15:00.000Z', escalationMinutes:3, stages:kind === 'question' ? [{handler:'supervisor',mode:'suggest'},{handler:'main_agent',mode:'suggest'},{handler:'user',mode:'suggest'}] : [{handler:'user',mode:'suggest'}] });
   }
   for (const kind of ['permission', 'plan'] as const) {
-    policies.write({}, { rules: [{ id: kind, kind, handler: 'rules', answer: 'yes' }] });
+    // The rule moves an approval away from the owner, so writing it needs the owner's reason.
+    policies.write({}, { rules: [{ id: kind, kind, handler: 'rules', answer: 'yes', note: '合成测试的授权说明' }] });
     assert.equal(policies.decide({ kind }).mode, 'suggest');
   }
 });
@@ -127,4 +128,26 @@ test('主对话问题默认等待两小时，显式用户期限及执行机期�
   assert.equal(policies.decide({...question, runId:'r'}, true).userDeadlineAt, '2026-01-01T00:15:00.000Z');
   policies.write({}, {userDeadlineMinutes:8});
   assert.equal(policies.decide(question, true).userDeadlineAt, '2026-01-01T00:08:00.000Z');
+});
+
+test('放宽审批的规则生效时必须有授权说明，起草时只校验格式', t => {
+  const { policies } = fixture(t);
+  const relaxed: PolicyRule = { id: 'relaxed', kind: 'permission', handler: 'supervisor', mode: 'auto', cwdUnder: '/srv/fixture' };
+  // A policy drafted inside a plan is only a shape until the owner approves the plan.
+  assert.doesNotThrow(() => validatePolicyPatch({ rules: [relaxed] }));
+  assert.throws(() => validatePolicyGrants({ rules: [relaxed] }), /放宽审批的规则必须填写授权说明/);
+  // It takes effect only when written, and writing without a reason is refused.
+  assert.throws(() => policies.write({ runId: 'r' }, { rules: [relaxed] }), /放宽审批的规则必须填写授权说明/);
+  assert.deepEqual(policies.read({ runId: 'r' }).rules, [], 'the refused rule is not stored');
+  const granted = policies.write({ runId: 'r' }, { rules: [{ ...relaxed, note: '主人批准了带这条规则的计划', grantedAt: createdAt }] });
+  assert.equal(granted.rules[0]!.note, '主人批准了带这条规则的计划');
+  // A later write that does not touch that rule is not blocked by it.
+  assert.doesNotThrow(() => policies.write({ runId: 'r' }, { escalateAfterMinutes: 5 }));
+  assert.equal(policies.read({ runId: 'r' }).rules[0]!.note, '主人批准了带这条规则的计划');
+  // Questions handed to an Agent, and approvals that stay with the owner, need no reason.
+  for (const rule of [
+    { id: 'q', kind: 'question' as const, handler: 'supervisor' as const, mode: 'auto' as const },
+    { id: 'u', kind: 'permission' as const, handler: 'user' as const, mode: 'suggest' as const },
+    { id: 'o', kind: 'permission' as const, handler: 'supervisor' as const, mode: 'off' as const },
+  ]) assert.doesNotThrow(() => policies.write({ runId: 'other' }, { rules: [rule] }), rule.id);
 });

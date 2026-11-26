@@ -2454,7 +2454,15 @@ export async function createWorkbench(config: AppConfig) {
     store.transaction(() => {
       for (const run of runs) {
         store.put('runs', run.id, run);
-        if (taskPolicy) policies.write({ runId: run.id, ...(run.projectId ? { projectId: run.projectId } : {}) }, taskPolicy, { notify: false });
+        if (taskPolicy) {
+          // A policy drafted inside a plan reaches here only after the owner approved that plan.
+          // That approval is the grant. Record it on any relaxed rule the draft left unexplained,
+          // so a later turn can say why an approval did not wait. Each run gets its own copy.
+          const grantedAt = now;
+          const approved = { ...taskPolicy, rules: (taskPolicy.rules ?? []).map(rule =>
+            rule.note ? rule : { ...rule, note: '主人批准了带这条规则的计划', grantedAt }) };
+          policies.write({ runId: run.id, ...(run.projectId ? { projectId: run.projectId } : {}) }, approved, { notify: false });
+        }
       }
       if (key) store.put('dispatch-keys', key, runs[0]!.id);
     });

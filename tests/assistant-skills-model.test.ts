@@ -4417,7 +4417,7 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
   let adapter!:FeishuOptions;
   const sent:string[]=[];
   let center='',parent='',child='',hidden='';
-  const {server,api,ask}=await fixture(t,req=>{
+  const {server,api,ask,requests}=await fixture(t,req=>{
     if(req.lastRole==='user'){
       if(JSON.stringify(req.content).includes('核对隔离')){
         assert.ok(!req.tools.includes('inbox_tree'));
@@ -4614,6 +4614,21 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     assert.equal(await ask(fileQuestion),'合成条款第六条');
     await adapter.onMessage(fileQuestion,{...owner,messageId:'file-question'});
     await t.waitFor(()=>assert.ok(sent.includes('合成条款第六条')));
+    // Export wording reaches Feishu private chat only while the export plugin is on.
+    const exportQuestion='飞书私聊里的表格怎么导出', lastSystem=()=>String(requests[requests.length-1].system);
+    const askPrivately=async(text:string)=>{
+      const before=requests.length;
+      await adapter.onMessage(text,{...owner,messageId:'export-'+before});
+      await t.waitFor(()=>assert.ok(requests.length>before));
+      return lastSystem();
+    };
+    const exportOn=await askPrivately(exportQuestion);
+    assert.match(exportOn,/点该表的「复制表格」/);
+    await api('/plugins/conversation-export',{enabled:false});
+    const exportOff=await askPrivately(exportQuestion+'，插件已停用');
+    assert.doesNotMatch(exportOff,/复制表格|导出对话预览/);
+    assert.match(exportOff,/对话导出插件已停用/);
+    await api('/plugins/conversation-export',{enabled:true});
     const editQuestion='请核对合成中心收件的编辑历史，编号 '+center;
     assert.equal(await ask(editQuestion),'采集到的上一版是合成旧正文。');
     await adapter.onMessage(editQuestion,{...owner,messageId:'edit-history'});

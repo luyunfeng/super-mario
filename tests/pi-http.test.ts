@@ -193,7 +193,15 @@ test('real pi SDK discovers an executor through HTTP SSE, dispatches autonomousl
   assert.equal(run.expectMinutes, 2);
   assert.equal(run.executionMode, 'task');
   assert.equal(run.status, 'running');
-  assert.deepEqual(launches, [{ executorId: 'codex', prompt, cwd: dataDir, mode: 'task' }]);
+  // The executor is given the owner's words first, then the acceptance criteria the owner
+  // confirmed, so it can check its own work against them.
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0]!.executorId, 'codex');
+  assert.equal(launches[0]!.cwd, dataDir);
+  assert.equal(launches[0]!.mode, 'task');
+  const sentPrompt = String(launches[0]!.prompt);
+  assert.ok(sentPrompt.startsWith(prompt), sentPrompt);
+  assert.ok(sentPrompt.includes(JSON.stringify(doneWhen)), sentPrompt);
   assert.equal(active.messages.filter(item => item.origin === 'result').length, 0);
   readyToComplete = true;
   await running.app.monitor.poll();

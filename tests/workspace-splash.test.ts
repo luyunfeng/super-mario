@@ -21,13 +21,14 @@ test('presentation contribution follows plugin disable, restart and re-enable', 
     assert.equal(initial.webExtensions?.[0]?.value.renderer, 'brand-splash');
     assert.equal(initial.plugins.find(plugin => plugin.id === 'workspace-splash')?.status, 'active');
     await toggle(false);
-    assert.deepEqual((await state()).webExtensions, []);
+    // Another plugin (assistant card examples) contributes its own extension; only the
+    // splash entry belongs to this test.
+    assert.equal((await state()).webExtensions?.some(entry => entry.id === 'workspace-splash'), false);
     await server.close(); server = await startServer(config);
-    assert.deepEqual((await state()).webExtensions, []);
+    assert.equal((await state()).webExtensions?.some(entry => entry.id === 'workspace-splash'), false);
     assert.equal((await state()).plugins.find(plugin => plugin.id === 'workspace-splash')?.enabled, false);
     await toggle(true);
-    assert.equal((await state()).webExtensions?.length, 1);
-    assert.equal((await state()).webExtensions?.[0]?.id, 'workspace-splash');
+    assert.equal((await state()).webExtensions?.some(entry => entry.id === 'workspace-splash'), true);
   } finally { await server.close(); await rm(dataDir, { recursive: true, force: true }); }
 });
 

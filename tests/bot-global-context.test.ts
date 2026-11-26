@@ -78,7 +78,8 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       assert.match(system, /核对未合并提交数并单独确认/);
       assert.ok(!input.tools.some((tool: any) => /remove_worktree|worktree_cleanup/.test(tool.function.name)));
       assert.match(system, /把可观察的通过条件写入 doneWhen/);
-      assert.match(system, /仅当用户明确要求独立工作树/);
+      // The constraint stayed; only its wording changed when worktrees could be created first.
+      assert.match(system, /用户明确要求在新工作树中执行任务时才传 isolatedWorktree=true/);
       assert.match(system, /只要求比较已有记录时保持只读/);
       assert.match(system, /要接着原会话对话时使用会话恢复流程/);
       assert.equal(input.tools.find((tool: any) => tool.function.name === 'work_dispatch')?.function.parameters.properties.worktreeRunId.type, 'string');

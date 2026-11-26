@@ -125,7 +125,10 @@ export function createPluginMetrics(store: Store, now: () => number = Date.now) 
     clearInterval(timer);
     closed = true;
     recent.clear();
-    flush();
+    // Metrics are a side record. When the host shuts down, the store may already be
+    // closed, and a failed write here must not stop the plugins after this one from
+    // being closed. There is no later round to retry in, so the pending counts are dropped.
+    try { flush(); } catch { /* the store is gone; nothing left to persist into */ }
   }
   function recentCalls(id: string) {
     return { items: (recent.get(id) ?? []).map(call => ({ ...call })).reverse() };
