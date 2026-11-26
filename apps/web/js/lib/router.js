@@ -1,8 +1,8 @@
 // 地址即状态：#页面/子页/…。旧地址只做重定向，不再各占一个页面。
 
-export const PAGES = ['home', 'chat', 'inbox', 'outbox', 'agent', 'projects', 'memory', 'channels'];
+export const PAGES = ['home', 'chat', 'messages', 'inbox', 'outbox', 'agent', 'projects', 'memory', 'channels'];
 
-export const PAGE_NAMES = { home: '首页', chat: '对话', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
+export const PAGE_NAMES = { home: '首页', chat: '对话', messages: '消息', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
 
 const ALIASES = {
   overview: 'home', interactions: 'chat', approvals: 'chat',

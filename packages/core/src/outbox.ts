@@ -17,7 +17,9 @@ import type { createEffects } from "./effects.ts";
 
 const collection = "outbox.items";
 export const outboxItemId = (owner: string, dedupKey: string) => digest([owner, dedupKey]);
-type Sender = (target: string, text: string, key: string) => Promise<void>;
+/** A channel sends, and may name the message it sent on the other side, so that the owner can take it back. */
+export type OutboxSendResult = { messageId?: string } | void;
+type Sender = (target: string, text: string, key: string) => Promise<OutboxSendResult>;
 /** Intent and authority are separate. Unknown delivery is never retried without a human decision. */
 export function createOutbox({
   store,
@@ -367,7 +369,7 @@ export function createOutbox({
       const job = Promise.resolve()
         .then(async () => {
           try {
-            await effects.perform({
+            const messageRef = await effects.perform({
               key: `outbox:${claimed.id}:${claimed.attempt}`,
               kind: "outbox.send",
               target,
@@ -387,8 +389,10 @@ export function createOutbox({
                     delivery: "no",
                   });
                 let watchdog: ReturnType<typeof setTimeout> | undefined;
+                // What the channel names for the sent message is kept, so that the ledger can offer a recall.
+                let sent: OutboxSendResult;
                 try {
-                  await Promise.race([
+                  sent = await Promise.race([
                     channel.send(
                       target,
                       claimed.content.text,
@@ -416,12 +420,16 @@ export function createOutbox({
                 } finally {
                   if (watchdog) clearTimeout(watchdog);
                 }
+                // What the channel named is the answer of the effect, so a call that finds it already
+                // confirmed, and so never runs this, still has it.
+                return sent && typeof sent === 'object' && typeof sent.messageId === 'string' ? sent.messageId.trim() : '';
               },
             });
             return save({
               ...claimed,
               status: "sent",
               error: undefined,
+              ...(messageRef ? { messageRef } : {}),
               updatedAt: timestamp(),
             });
           } catch (error) {

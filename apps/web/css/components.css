@@ -103,6 +103,10 @@
 .knowledge-hit { text-align: start; font: inherit; color: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; }
 .knowledge-hit:hover { text-decoration: underline; }
 .item__title { font-weight: 600; overflow-wrap: anywhere; }
+/* An item's title as the thing that opens it: it reads as a link and takes focus. */
+.item__button { padding: 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.item__button:hover { color: var(--brand); text-decoration: underline; }
+.item__button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 2px; }
 .item__meta { font-size: calc(13px * var(--reading-scale, 1)); color: var(--text-3); overflow-wrap: anywhere; }
 .item__end { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: none; max-width: 100%; }
 @media (max-width: 480px) {

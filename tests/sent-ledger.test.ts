@@ -120,3 +120,101 @@ test('台账的参数不对时拒绝，读取不改动任何记录', async t => 
   assert.equal((await fetch(f.server.url + '/api/v1/sent', { method: 'POST', headers: { authorization: 'Bearer offline-sent' } })).status, 404);
   assert.equal(JSON.stringify(f.server.app.approvals.list()), before);
 });
+
+/** A Feishu notice that went out through a bot's channel, with the id Feishu gave. */
+const BOT = 'a'.repeat(64), CHAT = 'feishu.bot:' + BOT + ':' + 'b'.repeat(16);
+
+async function recallFixture(t: { after(fn: () => void): void }, answer: (messageId: string) => Promise<void>) {
+  const f = await start(t);
+  f.server.app.setFeishuRecall(async (botId, messageId) => {
+    asked.push([botId, messageId]);
+    try { await answer(messageId); return { status: 'done' }; }
+    catch (error) { return { status: (error as { delivery?: string }).delivery === 'no' ? 'refused' : 'unknown', error: (error as Error).message }; }
+  });
+  return f;
+}
+const asked: Array<[string, string]> = [];
+const recall = (f: Awaited<ReturnType<typeof start>>, id: string, token = 'offline-sent') => fetch(f.server.url + '/api/v1/sent/' + encodeURIComponent(id) + '/recall', {
+  method: 'POST', headers: { authorization: 'Bearer ' + token } });
+
+test('台账里带消息编号的飞书记录可以撤回：主人确认后飞书才被叫到，结果留在记录上', async t => {
+  asked.length = 0;
+  const f = await recallFixture(t, async () => {});
+  const { store } = f.server.app;
+  store.put('outbox.items', 'sent-1', outgoing('sent-1', 'sent', '2026-11-27T10:00:00.000Z', { channel: CHAT, messageRef: 'om_recall_1' }));
+  store.put('outbox.items', 'sent-noref', outgoing('sent-noref', 'sent', '2026-11-27T10:00:01.000Z', { channel: CHAT }));
+  // Reading offers a recall for the one with an id, and not for the other or for a mail.
+  const items = (await f.read()).body.items as Array<Record<string, unknown>>;
+  assert.equal(items.find(item => item.id === 'outbox:sent-1')!.canRecall, true);
+  assert.equal(items.find(item => item.id === 'outbox:sent-1')!.botId, BOT);
+  assert.equal(items.find(item => item.id === 'outbox:sent-noref')!.canRecall, false);
+  assert.equal(items.find(item => item.id === 'approval:mail-1')!.canRecall, false);
+  assert.equal(items.find(item => item.id === 'approval:gh-1')!.canRecall, false);
+  // Nothing has been asked of Feishu by a read.
+  assert.deepEqual(asked, []);
+  // It needs the owner's token.
+  assert.equal((await recall(f, 'outbox:sent-1', '')).status, 401);
+  assert.deepEqual(asked, []);
+  // A mail and a record without an id cannot be taken back, and Feishu is not asked.
+  assert.equal((await recall(f, 'approval:mail-1')).status, 409);
+  assert.equal((await recall(f, 'outbox:sent-noref')).status, 409);
+  assert.equal((await recall(f, 'outbox:nope')).status, 404);
+  assert.deepEqual(asked, []);
+  // The recall asks the bot that sent it, by the id Feishu gave.
+  const answer = await recall(f, 'outbox:sent-1');
+  assert.equal(answer.status, 200);
+  const row = await answer.json() as Record<string, unknown>;
+  assert.deepEqual(asked, [[BOT, 'om_recall_1']]);
+  assert.equal(row.canRecall, false);
+  assert.equal((row.recall as { status: string }).status, 'done');
+  // It is kept on the outbox entry, and a second ask does not ask Feishu again.
+  assert.equal((store.get<OutboxItem>('outbox.items', 'sent-1')!.recall?.status), 'done');
+  assert.equal((await recall(f, 'outbox:sent-1')).status, 200);
+  assert.deepEqual(asked, [[BOT, 'om_recall_1']]);
+  const after = (await f.read()).body.items as Array<Record<string, unknown>>;
+  assert.equal(after.find(item => item.id === 'outbox:sent-1')!.canRecall, false);
+});
+
+test('飞书拒绝撤回时消息还在，结果未知时可以再试；两种都如实留在记录上', async t => {
+  asked.length = 0;
+  let mode = 'refuse';
+  const f = await recallFixture(t, async () => {
+    if (mode === 'refuse') throw Object.assign(new Error('飞书操作未执行 (API 230001)'), { delivery: 'no' });
+    if (mode === 'lose') throw Object.assign(new Error('飞书操作结果未知'), { delivery: 'unknown' });
+  });
+  const { store } = f.server.app;
+  store.put('outbox.items', 'sent-1', outgoing('sent-1', 'sent', '2026-11-27T10:00:00.000Z', { channel: CHAT, messageRef: 'om_recall_1' }));
+  // Refused: nothing was deleted, the message is still there, and the owner may try again.
+  const refused = await (await recall(f, 'outbox:sent-1')).json() as Record<string, unknown>;
+  assert.equal((refused.recall as { status: string }).status, 'refused');
+  assert.match(String((refused.recall as { error: string }).error), /230001/);
+  assert.equal(refused.canRecall, true);
+  // Unknown: it may have been deleted, and the owner may try again.
+  mode = 'lose';
+  const unknown = await (await recall(f, 'outbox:sent-1')).json() as Record<string, unknown>;
+  assert.equal((unknown.recall as { status: string }).status, 'unknown');
+  assert.equal(unknown.canRecall, true);
+  // A later try that succeeds ends it.
+  mode = 'ok';
+  const done = await (await recall(f, 'outbox:sent-1')).json() as Record<string, unknown>;
+  assert.equal((done.recall as { status: string }).status, 'done');
+  assert.equal(store.get<OutboxItem>('outbox.items', 'sent-1')!.recall?.status, 'done');
+  assert.equal(asked.length, 3);
+});
+
+test('发消息的机器人已经不在时撤回没有执行，如实留在记录上；接口不接受参数', async t => {
+  const f = await start(t);
+  const { store } = f.server.app;
+  store.put('outbox.items', 'sent-1', outgoing('sent-1', 'sent', '2026-11-27T10:00:00.000Z', { channel: CHAT, messageRef: 'om_recall_1' }));
+  const answer = await fetch(f.server.url + '/api/v1/sent/' + encodeURIComponent('outbox:sent-1') + '/recall?x=1', { method: 'POST', headers: { authorization: 'Bearer offline-sent' } });
+  assert.equal(answer.status, 400);
+  // The row may be recalled, but the bot that sent it is gone: nothing reached Feishu, and the row says why.
+  const refused = await recall(f, 'outbox:sent-1');
+  assert.equal(refused.status, 200);
+  const row = await refused.json() as { recall: { status: string; error: string }; canRecall: boolean };
+  assert.equal(row.recall.status, 'refused');
+  assert.match(row.recall.error, /机器人已经不在/);
+  assert.equal(row.canRecall, true);
+  assert.equal(store.get<OutboxItem>('outbox.items', 'sent-1')!.recall?.status, 'refused');
+});
+

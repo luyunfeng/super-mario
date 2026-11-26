@@ -7,6 +7,7 @@ export const hints = {
   'nav.agent': { tag: '配置谁来干活', detail: '设置主 Agent 的模型和可用执行者。你也可以决定哪些事可以自动处理。', example: '选模型，接入一台电脑。' },
   'nav.projects': { tag: '让 Agent 持续跟进', detail: '一个项目聚合它的待办、执行和资料。跟进能力以当前已启用的设置为准。', example: '新建“官网改版”项目。' },
   'nav.memory': { tag: '让 Agent 记住你', detail: '保存你的偏好、工作原则和项目资料。Agent 工作时可以检索这些记忆。', example: '先给结论，再给依据。' },
+  'nav.messages': { tag: '和机器人的所有对话', detail: '你与每个已配对机器人的独立对话都在这里，按最近活动排列。可以从这里打开、检索、归档。', example: '找一下上周和助理聊过的那个方案。' },
   'nav.channels': { tag: '在飞书里找 Agent', detail: '连接机器人后可以在飞书里对话。个人消息采集需要另行授权。', example: '今天有什么要处理？' },
   'chat.attention': { tag: '需要你拍板的事', detail: '审批、提问和飞书消息集中在这里。提交后请继续核对实际结果。', example: '批准执行，或回答一个问题。' },
   'agent.model': { tag: '对话用的大脑', detail: '主 Agent 使用这个模型回答和拆解任务。配置就绪不代表已经验证真实模型请求。', example: '使用自己的模型服务。' },

@@ -535,6 +535,35 @@ function outFixture() {
   };
 }
 
+
+test("outbox keeps the id the channel gives the sent message, so that the owner can take it back", async () => {
+  const f = outFixture();
+  try {
+    f.out.grant("sample", "feishu.bot", true);
+    f.out.registerChannel(
+      "feishu.bot",
+      async (_target, text) => (text === "plain" ? undefined : { messageId: "om_" + text }),
+      () => "owner-chat",
+    );
+    const input = (dedupKey: string, text: string) => ({ dedupKey, channel: "feishu.bot", target: "owner", content: { text } });
+    f.out.enqueue("sample", input("one", "named"));
+    f.out.enqueue("sample", input("two", "plain"));
+    await f.out.tick();
+    const byKey = (key: string) => f.out.list().find((item) => item.dedupKey === key)!;
+    assert.equal(byKey("one").status, "sent");
+    assert.equal(byKey("one").messageRef, "om_named");
+    // A channel that names nothing leaves the field out, and the ledger then offers no recall.
+    assert.equal(byKey("two").status, "sent");
+    assert.equal("messageRef" in byKey("two"), false);
+    // What was kept survives a restart, as the rest of the entry does.
+    const stored = JSON.parse(JSON.stringify(f.store.get("outbox.items", byKey("one").id)));
+    assert.equal(stored.messageRef, "om_named");
+  } finally {
+    await f.close();
+  }
+});
+
+
 test("outbox dedup, default approval, exact content/version and no implicit sending authorization", async () => {
   const f = outFixture();
   let sent = 0;

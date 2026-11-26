@@ -1,6 +1,8 @@
-// 以主人名义发出去的内容：飞书消息、邮件和 GitHub 评论，来自发件箱和审批记录。只读。
+// 以主人名义发出去的内容：飞书消息、邮件和 GitHub 评论，来自发件箱和审批记录。
+// 飞书消息可以由主人撤回：先问一次，确认后才告诉飞书。邮件和 GitHub 评论不能从这里撤回。
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Pill, Select } from '../ui/kit.js';
+import { systemText } from '../copy/terms.js';
 
 const CONNECTORS = [['', '全部'], ['飞书', '飞书'], ['邮箱', '邮箱'], ['GitHub', 'GitHub']];
 const PAGE = 10;
@@ -55,7 +57,8 @@ export function createSentLedgerUI({ api }) {
     replace(list, ...items.map(item => h('li', { class: 'item' },
       h('div', { class: 'item__main' },
         h('div', { class: 'row row--between row--wrap' },
-          h('div', { class: 'row' }, Pill(item.connector), h('span', null, item.action), h('time', { class: 'small muted', dateTime: item.at }, when(item.at))),
+          h('div', { class: 'row' }, Pill(item.connector), h('span', null, item.action), h('time', { class: 'small muted', dateTime: item.at }, when(item.at)),
+            item.recall?.status === 'done' ? Pill('已撤回') : null),
           h('span', { class: 'small muted' }, item.through === 'approval' ? '经我批准' : '按规则发出')),
         h('p', { class: 'small muted' }, '发往 ' + (item.target || '（没有记录目标）')),
         h('p', { class: 'small' }, firstLine(item.text))),
@@ -69,8 +72,44 @@ export function createSentLedgerUI({ api }) {
       item.messageRef ? h('p', { class: 'small muted' }, '对方那边的编号 ', h('code', null, item.messageRef)) : null,
       item.approvalId ? h('p', { class: 'small muted' }, '批准记录 ', h('code', null, item.approvalId)) : null,
       h('p', { class: 'md-p' }, item.text + (item.text.length >= 4000 ? '\n…（这里只显示前 4000 字，全文在批准记录里）' : '')),
+      recallPanel(item),
       h('div', { class: 'row' },
         Button({ label: '收起', size: 'sm', onClick: () => { detail.hidden = true; } })));
+  }
+
+  // Recall of a Feishu message, in the details. It is offered only when the record says the message can be taken
+  // back. It asks once, and only the confirming click tells Feishu. The outcome is kept on the row, so a reopened
+  // detail says that the message was taken back, or why it was not.
+  function recallPanel(item) {
+    const box = h('div', { class: 'stack' });
+    let asking = false, busy = false, failure = '';
+    async function run() {
+      busy = true; failure = ''; paint();
+      try {
+        const fresh = await api.post('/sent/' + encodeURIComponent(item.id) + '/recall', {});
+        Object.assign(item, fresh);
+      } catch (cause) { failure = systemText(cause.message); }
+      finally { busy = false; asking = false; paint(); void load(); }
+    }
+    function paint() {
+      replace(box,
+        item.recall?.status === 'done'
+          ? h('p', { class: 'small muted' }, '已于 ' + when(item.recall.at) + ' 撤回。')
+          : [
+            item.recall?.status === 'unknown' ? h('p', { class: 'small muted' }, '上次撤回的结果未知：' + (item.recall.error || '飞书没有确认') + '。可以再试一次。') : null,
+            item.recall?.status === 'refused' ? h('p', { class: 'small muted' }, '上次没有撤回：' + (item.recall.error || '飞书拒绝了') + '。') : null,
+            failure ? h('p', { class: 'small', role: 'alert' }, '没有撤回：' + failure) : null,
+            asking
+              ? h('div', { class: 'stack' },
+                h('p', { class: 'small' }, '撤回这条飞书消息？撤回后对方就看不到它了。'),
+                h('div', { class: 'row' },
+                  Button({ label: '撤回消息', kind: 'danger', size: 'sm', disabled: busy, onClick: run }),
+                  Button({ label: '先不撤回', size: 'sm', disabled: busy, onClick: () => { asking = false; paint(); } })))
+              : item.canRecall ? Button({ label: '撤回', size: 'sm', onClick: () => { asking = true; paint(); } }) : null,
+          ]);
+    }
+    paint();
+    return box;
   }
 
   filter.addEventListener('change', () => { connector = filter.value; detail.hidden = true; load(); });

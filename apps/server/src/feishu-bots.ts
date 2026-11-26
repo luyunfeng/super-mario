@@ -731,6 +731,25 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const row = app.store.get<PrivateThread>('feishu.private-threads', threadId);
     return row?.threadId === threadId && ownsThread(bot, owner(bot), row) ? row : undefined;
   }
+  /** Every independent conversation the owner has with a paired bot, newest first, across bots.
+   *  It is what the messages page shows: one list of all of them, each naming its bot. */
+  function messagesPage(options: { query?: string; archived?: boolean; offset?: number; limit?: number } = {}) {
+    const offset = options.offset ?? 0, limit = options.limit ?? 30;
+    // Both bounds are checked here as well as in the route: a NaN limit would otherwise slice to nothing.
+    if (!Number.isSafeInteger(offset) || offset < 0) throw Object.assign(new Error('分页位置须为不小于 0 的整数'), { status: 400 });
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Object.assign(new Error('每页条数须为 1 至 100 的整数'), { status: 400 });
+    const archived = options.archived === true;
+    const query = options.query?.trim() ?? '';
+    if (query.length > 500) throw Object.assign(new Error('检索词最长 500 个字符'), { status: 400 });
+    // A bot the owner has not paired has no conversations that are theirs: privateThreads knows that, and answers with nothing for it.
+    const all = settings.list().filter(bot => bot.enabled && bot.archivedAt === undefined).flatMap(bot => {
+      const rows = privateThreads(bot.id);
+      const items = query ? searchPrivateThreadList(app.store, rows, query).threads
+        : readPrivateThreadHistory(app.store, rows, archived);
+      return items.map(item => ({ ...item, botId: bot.id, botName: bot.name }));
+    }).sort((a, b) => b.latestAt.localeCompare(a.latestAt) || a.botId.localeCompare(b.botId) || a.threadId.localeCompare(b.threadId));
+    return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+  }
   function requireThread(botId: string, threadId: string) {
     const row = ownedThread(botId, threadId);
     if (!row) {
@@ -3415,8 +3434,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const card = app.store.get<Card>('interactions', id.slice('interaction-notice:'.length));
     return !card || !!card.runId;
   }
+  /** Sends one reply or notice. The ids Feishu gives what it sent are kept by mailbox entry (sentMessageIds),
+   *  so that the outbox channel that asked can name the message for a recall. */
   async function send(botId: string, target: string, text: string, key: string): Promise<void> {
     const bot = current(botId), state = runtime(botId), epoch = state.epoch, adapter = state.adapter;
+    const messageIds: string[] = [];
     const existing = app.mailboxes.list().find(item => item.botId === botId && item.direction === 'outbox' && item.eventKey === key);
     const envelope = existing && app.store.get<Envelope>('feishu.bot.envelopes', existing.id);
     // A pre-upgrade outbox may still hold private execution output awaiting its first send.
@@ -3440,6 +3462,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const deliver = async (body: string) => {
       if (!active(botId, epoch, bot.revision) || adapter !== state.adapter) throw noDelivery('机器人发送已取消');
       checkEnvelope(entry, current(botId));
+      // Every branch above may add its own onSent. This one wraps it last, at the adapter call, so that
+      // it sees each id whatever the branch, and changes nothing of what the branch records.
+      const sendContext = (context: FeishuSendContext) => {
+        const previous = context.onSent;
+        context.onSent = (id, type) => { previous?.(id, type); if (id?.trim()) messageIds.push(id.trim()); };
+        return context;
+      };
       const dashboard = stamp?.dashboard;
       if (key.startsWith('feishu-dashboard:') && (!dashboard || bot.scope.kind !== 'global'
         || dashboard.owner.chatId !== target || owner(bot)?.chatId !== target || owner(bot)?.senderId !== dashboard.owner.senderId)) {
@@ -3607,16 +3636,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             messageId = id;
             originalSent?.(id, type);
           };
-          await adapter.send(target, body, context);
+          await adapter.send(target, body, sendContext(context));
           return { messageId, fallback };
         });
       }
-      try { await adapter.send(target, body, context); }
+      try { await adapter.send(target, body, sendContext(context)); }
       catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery === 'no' ? 'no' : 'unknown' }); }
     };
-    const run = async () => {
+    // The effect keeps this answer, so a call that finds the send already confirmed gets the same ids.
+    const run = async (): Promise<{ messageIds: string[] }> => {
       try {
-      if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', { botId, accountId: bot.appId, chatId: target, target, text, key }, async input => {
+      const invocations = app.plugins?.invocations;
+      if (invocations) await invocations.invoke('channel.send', { botId, accountId: bot.appId, chatId: target, target, text, key }, async input => {
         if ((stamp?.reviewRunId || stamp?.inboxReplySource || stamp?.dashboard || stamp?.questionId || stamp?.command || stamp?.progressMessageId) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
         if (!input || typeof input !== 'object' || Array.isArray(input) || input.botId !== botId || input.accountId !== bot.appId
           || input.chatId !== target || input.target !== target || input.key !== key || typeof input.text !== 'string' || !input.text.trim()) throw noDelivery('渠道钩子不能改变机器人、目标或动作标识');
@@ -3624,10 +3655,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       });
       else await deliver(text);
       } catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery ?? 'unknown' }); }
+      return { messageIds };
     };
     try {
-      if (app.effects) await app.effects.perform({ key: effectKey, kind: 'feishu.send', target, summary: '机器人回复', content: { botId, text }, run });
-      else {
+      const effects = app.effects;
+      if (effects) {
+        const answer = await effects.perform({ key: effectKey, kind: 'feishu.send', target, summary: '机器人回复', content: { botId, text }, run });
+        // A send that this call made has its ids in messageIds already; one found confirmed has them in the effect's answer.
+        // Effects recorded before ids were kept hold null here.
+        for (const id of answer?.messageIds ?? []) if (!messageIds.includes(id)) messageIds.push(id);
+      } else {
         // Minimal hosts still get a durable claim; uncertainty is never retried.
         const old = app.store.get<{ status: string }>('feishu.bot.sends', effectKey);
         if (old?.status === 'completed') return;
@@ -3636,6 +3673,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         await run(); app.store.put('feishu.bot.sends', effectKey, { status: 'completed' });
       }
     } catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery ?? 'unknown' }); }
+    if (messageIds.length) {
+      app.store.put('feishu.bot.sent-ids', entry.id, { messageIds, at: Date.now() });
+      // Only the outbox channel that asked reads this, moments later. A day old is of no use to anyone.
+      const remove = app.store.remove?.bind(app.store);
+      if (remove) app.store.transaction(() => {
+        for (const row of app.store.list<{ id: string; at?: number }>('feishu.bot.sent-ids')) if (!row.at || Date.now() - row.at > 24 * 3600 * 1000) remove('feishu.bot.sent-ids', row.id);
+      });
+    }
   }
   async function returnResult(input: MailboxEntry, bot: FeishuBotSettings, message: Message, relay: Relay) {
     // Validate the original forward delegation. Reverse scope rules would reject global → project returns.
@@ -3806,7 +3851,23 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const receipt = app.store.get<{id?:string;status:string}>('feishu.bot.dispatch',bot.id+':'+bot.appId+':'+entry.id);
       return stamp?.revision === bot.revision && stamp.privateSenderId === paired.senderId && receipt?.id === input.id && receipt.status === 'completed';
     },
-    topicChats, todoThread, bindWorkerTopic, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, privateThreadSelection, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
+    topicChats, todoThread, bindWorkerTopic, canUseScope, listGroupReads, privateThreads, messagesPage,
+    /** The ids Feishu gave what a mailbox entry sent, in the order it sent them. Empty when it sent nothing or
+     *  the ids are more than a day old. */
+    sentMessageIds(entryId: string): string[] { return app.store.get<{ messageIds: string[] }>('feishu.bot.sent-ids', entryId)?.messageIds ?? []; },
+    /** Takes back a message this bot sent, with the bot's live adapter. The adapter says what happened: it throws
+     *  with delivery 'no' when nothing was deleted, with 'unknown' when it may have been. */
+    async recallMessage(botId: string, messageId: string) {
+      // A bot that is gone, archived or not connected is a refusal: nothing reached Feishu.
+      let bot: FeishuBotSettings;
+      try { bot = current(botId); } catch { throw Object.assign(new Error('发这条消息的机器人已经不在了'), { delivery: 'no' }); }
+      if (bot.archivedAt || !bot.enabled) throw Object.assign(new Error('发这条消息的机器人已停用或归档'), { delivery: 'no' });
+      if (!owner(bot)) throw Object.assign(new Error('这个机器人没有配对的主人'), { delivery: 'no' });
+      const state = runtime(bot.id);
+      if (!state.adapter?.recallMessage) throw Object.assign(new Error('这个机器人现在没有连上飞书'), { delivery: 'no' });
+      await state.adapter.recallMessage(messageId);
+    },
+    requireThread, deletePrivateThread, privateThreadMetadata, privateThreadSelection, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
     searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string, threadId?: string, role?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))

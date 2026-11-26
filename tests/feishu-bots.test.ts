@@ -93,6 +93,33 @@ function fixture(t: test.TestContext, delivered?: (target:string,text:string,con
     deny() { denied = true; }, uncertain() { uncertain = true; }, postFail() { postFailure = true; }, hookCount: () => hookCount };
 }
 
+
+
+test('发送后记下飞书给的消息编号，按邮箱条目可取；同一动作再调一次仍拿得到', async t => {
+  let n = 0;
+  const f = fixture(t, (_target, _text, context) => { context?.onSent?.('om_' + ++n); });
+  const a = await f.add('SentIds', { kind: 'global' }, true);
+  await a.pair();
+  // Pairing itself sends a message, before the command does.
+  const pairingEntry = f.mailboxes.list().find(row => row.direction === 'outbox')!;
+  assert.deepEqual(f.controller.sentMessageIds(pairingEntry.id), ['om_1']);
+  const before = a.instance.sent.length;
+  await a.instance.options.onMessage('/dashboard', source('dashboard'));
+  const entry = f.mailboxes.list().find(row => row.eventKey.startsWith('feishu-dashboard:'))!;
+  assert.equal(entry.status, 'completed');
+  const sent = a.instance.sent.length - before;
+  // One id is kept for each message the entry sent, in order.
+  assert.deepEqual(f.controller.sentMessageIds(entry.id), Array.from({ length: sent }, (_value, index) => 'om_' + (index + 2)));
+  const kept = f.controller.sentMessageIds(entry.id);
+  // The same action asked for again finds its effect confirmed and does not send twice; the ids are still there.
+  await f.controller.send(entry.botId, entry.target!, entry.text, entry.eventKey);
+  assert.equal(a.instance.sent.length, before + sent);
+  assert.deepEqual(f.controller.sentMessageIds(entry.id), kept);
+  // An entry that sent nothing has no ids.
+  assert.deepEqual(f.controller.sentMessageIds('box-nope'), []);
+});
+
+
 test('dashboard is an owner-only private global command with durable delivery deduplication', async t => {
   const f = fixture(t), a = await f.add('Dashboard', { kind: 'global' }, true);
   const receive = a.instance.options.onMessage;
@@ -374,7 +401,7 @@ test('group defaults deny; only paired human allowlist and precise mention enter
   const inbox = f.mailboxes.list().filter(e => e.direction === 'inbox');
   assert.equal(inbox.length, 1); assert.equal(inbox[0].status, 'pending'); assert.equal(f.posts.length, 0);
   assert.equal(live.sent[0][0], 'oc_team');
-  assert.deepEqual(live.contexts[0], { replyTo: 'team-message', threadId: 'thread-team' });
+  { const { onSent, ...first } = live.contexts[0]!; assert.deepEqual(first, { replyTo: 'team-message', threadId: 'thread-team' }); }
   await f.mailboxes.process(inbox[0].id, inbox[0].version);
   await f.controller.dispatchInbox(f.mailboxes.list().find(e => e.id === inbox[0].id)!);
   assert.equal(f.posts.length, 1);
@@ -550,7 +577,7 @@ test('group-origin relay preserves the approved thread and both sides can revoke
   const liveB = f.instances.find(instance => !instance.closed && instance.options.appId === b.bot.appId)!;
   f.reply(relayPost.id); await tick();
   assert.deepEqual(liveB.sent, [['oc_team', `answer-reply-${relayPost.id}`]]);
-  assert.deepEqual(liveB.contexts.at(-1), { replyTo: 'relay-group-parent', threadId: 'thread-team' });
+  { const { onSent, ...relay } = liveB.contexts.at(-1)!; assert.deepEqual(relay, { replyTo: 'relay-group-parent', threadId: 'thread-team' }); }
   await f.controller.update(b.bot.id, { groupChats: [] });
   f.reply(relayPost.id, 'revoked-target'); await tick();
   assert.deepEqual(f.instances.at(-1)!.sent, []);
@@ -632,7 +659,7 @@ test('result inherits only the initiating group thread, and target revocation bl
   assert.equal(liveA.sent.length, 0);
   f.reply(accepted[0].id, 'summary'); await tick();
   assert.deepEqual(liveA.sent, [['oc_team', 'answer-summary']]);
-  assert.deepEqual(liveA.contexts.at(-1), { replyTo: 'result-origin', threadId: 'thread-team' });
+  { const { onSent, ...summary } = liveA.contexts.at(-1)!; assert.deepEqual(summary, { replyTo: 'result-origin', threadId: 'thread-team' }); }
   await f.controller.update(b.bot.id, { enabled: false });
   f.reply(accepted[0].id, 'late-summary'); await tick(); assert.equal(liveA.sent.length, 1);
 });

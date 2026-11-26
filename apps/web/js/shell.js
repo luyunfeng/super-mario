@@ -11,7 +11,7 @@ import { openTerminalWall } from './features/terminal-wall.js';
 import { PAGES, PAGE_NAMES } from './lib/router.js';
 
 
-const NAV_ICONS = { home: 'home', chat: 'chat', inbox: 'inbox', outbox: 'outbox', agent: 'agent', projects: 'projects', memory: 'memory', channels: 'channels' };
+const NAV_ICONS = { home: 'home', chat: 'chat', messages: 'messages', inbox: 'inbox', outbox: 'outbox', agent: 'agent', projects: 'projects', memory: 'memory', channels: 'channels' };
 
 export function createShell({ api, store, router, scope }) {
   // —— 导航 ——

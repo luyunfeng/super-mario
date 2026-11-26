@@ -244,6 +244,9 @@ export function createFeishuGateway(
       const entry = app.mailboxes.put({ direction: 'outbox', botId: bot.id, scope: bot.scope, eventKey: key, title: '工作台通知', text, target, requiresConfirmation: false });
       const result = await app.mailboxes.process(entry.id);
       if (result.status !== 'completed') throw Object.assign(new Error(result.error ?? '通知未送达'), { delivery: result.status === 'unknown' ? 'unknown' : 'no' });
+      // The outbox names the message so that the owner can take it back from the ledger.
+      const messageId = bots.sentMessageIds(entry.id)[0];
+      return messageId ? { messageId } : undefined;
     }, () => notificationBots().find(b => b.id === bot.id && identity(b) === snapshot && b.enabled && b.paired)?.replyTarget, () => notificationBots().some(b=>b.id===bot.id&&identity(b)===snapshot&&b.enabled&&b.paired)?snapshot:undefined);
     return channel;
   });
@@ -278,6 +281,15 @@ export function createFeishuGateway(
     (chatId, text, key) => feishu.sendFromOutbox(chatId, text, key),
   );
   app.setFeishuStatus(() => ({ ...feishu.status(), reason: feishu.status().reason ?? '' }));
+  // The ledger's recall asks the bot that sent the message. What the adapter throws says what happened:
+  //  'no' is a refusal with nothing deleted; 'unknown' is that it may have been deleted.
+  app.setFeishuRecall(async (botId, messageId) => {
+    try { await bots.recallMessage(botId, messageId); return { status: 'done' }; }
+    catch (error) {
+      const delivery = (error as { delivery?: string }).delivery;
+      return { status: delivery === 'no' ? 'refused' : 'unknown', error: error instanceof Error ? error.message : String(error) };
+    }
+  });
 
   return { feishu, personal, pins, reactions, readFileText, currentHistory, configureHistory, readEditHistory, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
 }

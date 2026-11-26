@@ -28,6 +28,7 @@ import { createAgentPage } from './pages/agent.js';
 import { createProjectsPage } from './pages/projects.js';
 import { createMemoryPage } from './pages/memory.js';
 import { createChannelsPage } from './pages/channels.js';
+import { createMessagesPage } from './pages/messages.js';
 
 applyHintPreference();
 installTheme();
@@ -73,6 +74,7 @@ const ctx = {
 const pages = {
   home: createHomePage(ctx),
   chat: createChatPage(ctx),
+  messages: createMessagesPage(ctx),
   inbox: createMailboxPage({ ...ctx, direction: 'inbox' }),
   outbox: createMailboxPage({ ...ctx, direction: 'outbox' }),
   agent: createAgentPage(ctx),

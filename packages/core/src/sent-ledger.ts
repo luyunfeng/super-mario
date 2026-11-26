@@ -4,8 +4,9 @@
 // Only what is known to have gone out is in it. A request that was refused, declined or
 // failed, and one whose outcome is unknown, is not: nothing is known to have reached anyone.
 // Nothing is written a second time. Each row is read from the record that already holds it.
+// The one write is the answer of a recall the owner asked for, which is kept on the outbox entry.
 import type { Approval } from '../../protocol/src/index.ts';
-import type { OutboxItem, Store } from '../../plugin-sdk/src/index.ts';
+import type { OutboxItem, OutboxRecall, Store } from '../../plugin-sdk/src/index.ts';
 
 /** How much of what was written is shown in a row. The whole of it is on the record. */
 export const SENT_TEXT_MOST = 4000;
@@ -40,6 +41,12 @@ export interface SentItem {
   approvalId?: string;
   /** The outbox entry it was sent from, for the connectors that go through the outbox. */
   outboxId?: string;
+  /** The bot that sent a Feishu message, so that a recall asks the same bot. */
+  botId?: string;
+  /** Whether the owner can take it back: a Feishu message the bot sent, with its id kept, not already taken back. */
+  canRecall: boolean;
+  /** When the owner tried to take it back, and how that ended. */
+  recall?: OutboxRecall;
 }
 
 /** One page of the ledger. */
@@ -53,6 +60,14 @@ export interface SentPage {
 
 const MAIL_SEND = 'plugin:mail-connector.send';
 const GITHUB_COMMENT = 'plugin:github-connector.comment';
+
+/** The bot an outbox channel belongs to. A bot's notices go out on feishu.bot:<bot id>:<binding>; any other
+ *  channel, and a channel whose id is not a bot's, answers with nothing. */
+function botOfChannel(channel: string): string | undefined {
+  if (!channel.startsWith('feishu.bot:')) return undefined;
+  const id = channel.split(':')[1];
+  return id && /^[0-9a-f]{64}$/.test(id) ? id : undefined;
+}
 
 /** What was written, cut to what a row shows. The cut is on characters, not bytes. */
 function cut(value: string, most: number): string {
@@ -80,9 +95,16 @@ function position(row: { at: string; id: string }): string {
 }
 
 /**
- * The ledger. It reads the outbox and the approvals, and writes nothing of its own.
+ * The ledger. It reads the outbox and the approvals. The one thing it writes is the answer of a recall,
+ * kept on the outbox entry the row was read from.
  */
-export function createSentLedger({ store }: { store: Store }) {
+/** What the channel says of a recall it was asked for. `refused` means nothing was deleted and the message is still
+ *  there; `unknown` means it may have been deleted and the channel did not confirm. */
+export type SentRecallAnswer = { status: 'done' | 'refused' | 'unknown'; error?: string };
+
+export function createSentLedger({ store, recallFeishu }: { store: Store; recallFeishu?: (messageId: string, botId?: string) => Promise<SentRecallAnswer> }) {
+  // One recall at a time per row. A second ask while the first is in flight waits for its answer.
+  const inFlight = new Map<string, Promise<SentItem>>();
   function all(): SentItem[] {
     const rows: SentItem[] = [];
     // Replies and notices go out through the outbox. Only what was sent is taken: one that
@@ -94,6 +116,11 @@ export function createSentLedger({ store }: { store: Store }) {
         target: item.target ? '飞书 ' + item.target : '飞书', text: cut(item.content.text, SENT_TEXT_MOST),
         through: item.approvalId ? 'approval' : 'rule',
         ...(item.approvalId ? { approvalId: item.approvalId } : {}), outboxId: item.id,
+        ...(item.messageRef ? { messageRef: item.messageRef } : {}),
+        // A bot's notices go out on the channel feishu.bot:<bot id>:<binding>. A recall asks that bot.
+        ...(botOfChannel(item.channel) ? { botId: botOfChannel(item.channel)! } : {}),
+        canRecall: Boolean(item.messageRef) && item.recall?.status !== 'done',
+        ...(item.recall ? { recall: item.recall } : {}),
       });
     }
     // A mail and a GitHub comment go out when the approval that asks for it is carried out.
@@ -114,6 +141,8 @@ export function createSentLedger({ store }: { store: Store }) {
           id: 'approval:' + approval.id, at: approval.updatedAt, connector: '邮箱', action: '发送邮件',
           target: recipients(params), text: cut(subject ? '主题：' + subject + '\n\n' + body : body, SENT_TEXT_MOST), through: 'approval', approvalId: approval.id,
           ...(typeof result.messageId === 'string' && result.messageId ? { messageRef: result.messageId } : {}),
+          // Once a server has a mail, nothing takes it back.
+          canRecall: false,
         });
       } else if (approval.kind === GITHUB_COMMENT) {
         // "already-sent" is a carry-out that found the comment had gone out before, under the
@@ -124,6 +153,8 @@ export function createSentLedger({ store }: { store: Store }) {
           target: String(params.repository ?? '') + ' #' + String(params.number ?? ''), text: cut(approval.details, SENT_TEXT_MOST),
           through: 'approval', approvalId: approval.id,
           ...(typeof result.url === 'string' && result.url ? { messageRef: result.url } : {}),
+          // A comment is deleted from the machine signed in to GitHub, which is not at hand here.
+          canRecall: false,
         });
       }
     }
@@ -142,7 +173,31 @@ export function createSentLedger({ store }: { store: Store }) {
     return { items: page, hasMore: rest.length > page.length, ...(last && rest.length > page.length ? { next: { at: last.at, id: last.id } } : {}) };
   }
 
-  return { read };
+  /** One row by id, from the whole ledger and not from a page. */
+  function find(id: string): SentItem | undefined { return all().find(item => item.id === id); }
+
+  /** The owner takes back one Feishu message the bot sent. The caller has checked that the row may be
+   *  recalled and that the owner asked for it. The answer is kept on the outbox entry, whatever it is, so
+   *  that a restart does not lose it. A row already taken back answers so again without asking the channel. */
+  async function recall(id: string): Promise<SentItem> {
+    const row = all().find(item => item.id === id);
+    if (!row) throw new Error('这条记录已不在');
+    if (row.recall?.status === 'done') return row;
+    if (!row.outboxId || !row.messageRef || !recallFeishu) throw new Error('这条记录现在不能撤回');
+    const running = inFlight.get(id);
+    if (running) return running;
+    const { outboxId, messageRef } = row;
+    const job = (async () => {
+      const item = store.get<OutboxItem>('outbox.items', outboxId);
+      if (!item || item.status !== 'sent' || item.messageRef !== messageRef) throw new Error('这条记录已变化，请刷新后再试');
+      const answer = await recallFeishu!(messageRef, row.botId);
+      store.put('outbox.items', item.id, { ...item, recall: { status: answer.status, at: new Date().toISOString(), ...(answer.error ? { error: answer.error } : {}) } });
+      return all().find(item => item.id === id)!;
+    })().finally(() => inFlight.delete(id));
+    inFlight.set(id, job);
+    return job;
+  }
+  return { read, find, recall };
 }
 
 export type SentLedger = ReturnType<typeof createSentLedger>;

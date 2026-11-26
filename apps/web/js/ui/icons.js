@@ -8,6 +8,7 @@ const rect = (x, y, width, height, rx) => ['rect', { x, y, width, height, rx }];
 const shapes = {
   home: [p('m3 10 9-7 9 7v10h-6v-6H9v6H3Z')],
   chat: [p('M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z')],
+  messages: [p('M17 8H7a4 4 0 0 0-4 4v3a4 4 0 0 0 4 4h1v3l4-3h5a4 4 0 0 0 4-4v-3a4 4 0 0 0-4-4Z'), p('M9 4h8a4 4 0 0 1 4 4v2'), p('M6 11h6')],
   inbox: [p('M4 4h16l2 10v6H2v-6L4 4Z'), p('M2 14h6l2 3h4l2-3h6')],
   outbox: [p('M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6'), p('M12 15V3'), p('m7 8 5-5 5 5')],
   agent: [p('M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3Z'), p('M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15Z')],

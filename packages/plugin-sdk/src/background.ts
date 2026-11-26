@@ -146,6 +146,16 @@ export interface OutboxItem extends OutboxInput {
   createdAt: string;
   updatedAt: string;
   auditedBy?: string;
+  /** The sent message's id on the other side, when the channel reported one. It is what a recall names. */
+  messageRef?: string;
+  /** When the owner took the message back, and how that ended. */
+  recall?: OutboxRecall;
+}
+/** How a recall ended. Only done means the message is known to be gone; the others leave it uncertain or refused. */
+export interface OutboxRecall {
+  status: "done" | "refused" | "unknown";
+  at: string;
+  error?: string;
 }
 export interface OutboxApi {
   enqueue(input: OutboxInput): {

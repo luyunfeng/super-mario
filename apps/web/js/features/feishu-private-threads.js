@@ -15,7 +15,9 @@ function historyMessageLabel(message) {
   return [message.role==='user'?'用户':'助手',status,new Date(message.createdAt).toLocaleString()].filter(Boolean).join(' · ');
 }
 
-export function openPrivateThreads({ api, bot, store, onClose, target }) {
+// target opens one conversation straight away. backLabel names where the back button returns to,
+// so that a caller other than the agent page can say so.
+export function openPrivateThreads({ api, bot, store, onClose, target, backLabel = '返回 Agent' }) {
   const base = '/feishu/bots/' + encodeURIComponent(bot.id) + '/threads';
   const owner = api.draftOwner(), route = location.hash;
   const body = h('div', { class: 'stack', 'aria-live': 'polite' });
@@ -95,7 +97,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     }
   });
   const current = id => id === loadId && drawer.el.open && valid();
-  const back = () => target ? Button({label:'返回 Agent',onClick:drawer.close})
+  const back = () => target ? Button({label:backLabel,onClick:drawer.close})
     : Button({ label: '返回列表', onClick: () => list() });
   function inaccessible(error) {
     if (![401, 403, 404].includes(error.status) && !(error.status === 503 && error.message.includes('飞书插件已停用'))) return false;

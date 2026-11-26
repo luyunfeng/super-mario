@@ -582,6 +582,17 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             ...(afterAt !== undefined && afterId !== undefined ? { after: { at: afterAt, id: afterId } } : {}),
           }));
         }
+        // The owner takes back one Feishu message the bot sent. It is asked for from the ledger, on the owner's own
+        // device, once for each click; a row already taken back answers so again.
+        {
+          const match = path.match(/^\/api\/v1\/sent\/([^/]+)\/recall$/);
+          if (match && method === 'POST') {
+            if (url.searchParams.size) throw new InputError('这条接口不接受参数');
+            let id: string;
+            try { id = decodeURIComponent(match[1]!); } catch { throw new InputError('记录编号无效'); }
+            return json(res, 200, await app.recallSent(id));
+          }
+        }
         if (path === '/api/v1/mail/preset' && method === 'GET') {
           const email = url.searchParams.get('email') ?? '';
           if (url.searchParams.size > 1 || (url.searchParams.size === 1 && !url.searchParams.has('email'))) throw new InputError('只接受 email 参数');
@@ -793,6 +804,18 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/feishu/bots' && method === 'GET') {
           return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
             ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));
+        }
+        // Every independent conversation the owner has with a paired bot, across bots, for the
+        // messages page. The owner's paired bots only: another's conversations are not theirs.
+        if (path === '/api/v1/feishu/messages' && method === 'GET') {
+          for (const key of url.searchParams.keys()) if (!['query', 'archived', 'offset', 'limit'].includes(key)) throw new InputError('消息页只接受 query、archived、offset 和 limit');
+          const limit = Number(url.searchParams.get('limit') ?? 30), offset = Number(url.searchParams.get('offset') ?? 0);
+          if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new InputError('每页条数须为 1 至 100 的整数');
+          if (!Number.isSafeInteger(offset) || offset < 0) throw new InputError('分页位置须为不小于 0 的整数');
+          return json(res, 200, bots.messagesPage({
+            ...(url.searchParams.has('query') ? { query: url.searchParams.get('query') ?? '' } : {}),
+            archived: url.searchParams.get('archived') === '1', offset, limit,
+          }));
         }
         const todoThread = path.match(/^\/api\/v1\/todos\/([^/]+)\/thread$/);
         if (todoThread && (method === 'GET' || method === 'DELETE' || method === 'PUT')) {

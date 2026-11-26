@@ -55,7 +55,7 @@ import { classifyImapError, connectionOptions, ImapError, libraryOpen, setMessag
 import { MessageError, readAttachment, readMessage } from './mail-message.ts';
 import { searchFolder } from './mail-search.ts';
 import { createAttachmentClaims } from './mail-attachment-claims.ts';
-import { createSentLedger, SENT_CONNECTORS, SENT_MAX, type SentConnector } from './sent-ledger.ts';
+import { createSentLedger, SENT_CONNECTORS, SENT_MAX, type SentConnector, type SentRecallAnswer } from './sent-ledger.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -649,9 +649,14 @@ export async function createWorkbench(config: AppConfig) {
   // The bytes of an attachment being saved on a machine are held here for the moment of the
   // save. The machine channel carries small messages, so the machine takes them over HTTP.
   const attachmentClaims = createAttachmentClaims();
-  // What went out in the owner's name, read from the outbox and the approvals. It holds
-  // nothing of its own.
-  const sentLedger = createSentLedger({ store });
+  // What went out in the owner's name, read from the outbox and the approvals. The one thing it
+  // writes is the answer of a recall, kept on the outbox entry. The Feishu adapter is the server's,
+  // so it is handed in once the gateway is up.
+  let recallFeishu: ((botId: string, messageId: string) => Promise<SentRecallAnswer>) | undefined;
+  const sentLedger = createSentLedger({ store, recallFeishu: (messageId, botId) => {
+    if (!recallFeishu || !botId) throw new InputError('飞书没有连上，现在不能撤回', 409);
+    return recallFeishu(botId, messageId);
+  } });
   /** One call from the assistant's mail tools. Each goes to what does it, so the tool
    *  checks the input and the workbench does the reading or asks for the approval. */
   async function mailTool(name: 'accounts' | 'search' | 'read' | 'send' | 'save-attachment', input: Record<string, unknown>, signal: AbortSignal): Promise<Json> {
@@ -725,6 +730,16 @@ export async function createWorkbench(config: AppConfig) {
       ...(limit !== undefined ? { limit } : {}),
       ...(position ? { after: position } : {}),
     });
+  }
+  /** The owner takes back one Feishu message the bot sent, from the ledger. The row is found again and checked
+   *  here, so that a row of another kind is refused before anything is asked of Feishu. */
+  async function recallSent(id: unknown) {
+    if (typeof id !== 'string' || !id) throw new InputError('记录编号无效');
+    const row = sentLedger.find(id);
+    if (!row) throw new InputError('这条记录已不在', 404);
+    if (row.connector !== '飞书' || (!row.canRecall && row.recall?.status !== 'done')) throw new InputError('这类内容不能撤回', 409);
+    if (!row.botId) throw new InputError('这条记录没有记下是哪个机器人发的，现在不能撤回', 409);
+    return sentLedger.recall(id);
   }
   /** Whether a request names a position in the ledger: a time and an id, and nothing else. */
   function isPosition(value: unknown): value is { at: string; id: string } {
@@ -3986,6 +4001,9 @@ export async function createWorkbench(config: AppConfig) {
     setGroupReadRecords(handler: NonNullable<typeof groupReadRecords>) { groupReadRecords = handler; },
     setPrivateSearch(handler: NonNullable<typeof privateSearch>) { privateSearch = handler; },
     setPrivateExport(handler: NonNullable<typeof privateExport>) { privateExport = handler; },
+    /** How the server takes back a Feishu message. It answers done, refused (nothing deleted) or unknown (may be deleted). */
+    setFeishuRecall(handler: (botId: string, messageId: string) => Promise<SentRecallAnswer>) { recallFeishu = handler; },
+    recallSent,
     setPrivateConversation(handler: NonNullable<typeof privateConversation>) { privateConversation = handler; },
     setBotRelay(relay: NonNullable<typeof botRelay>) { botRelay = relay; },
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },
