@@ -9,27 +9,23 @@ import { createMailAccounts } from '../packages/core/src/mail-accounts.ts';
 import { createMailReader } from '../packages/core/src/mail-reader.ts';
 import { ImapError, type ImapClient } from '../packages/core/src/mail-imap.ts';
 import type { Mailbox, MailSummary } from '../packages/protocol/src/mail.ts';
+import { fakeMailServer } from './mail-fixture.ts';
 
 const SLASH = String.fromCharCode(92);
 
-/** A stand-in connection. It answers from what it was given and records what it was asked. */
+/** A server with one message in the inbox. It counts connections and answers from what it was given. */
 function fakeServer(options: { failConnect?: Error; failList?: Error } = {}) {
   const clients: ImapClient[] = [];
   let logouts = 0;
   const open = async () => {
     if (options.failConnect) throw options.failConnect;
-    const client: ImapClient = {
-      async list() {
-        if (options.failList) throw options.failList;
-        return [{ path: 'INBOX', name: 'INBOX', flags: new Set<string>() }];
-      },
-      async mailboxOpen() { return { path: 'INBOX', totalCount: 1, unseenCount: 1 }; },
-      // The body is an async generator, so a read has to await it as it would on a real server.
-      fetch: async function * () {
-        yield { uid: 7, envelope: { subject: '工资条', from: [{ address: 'payroll@example.invalid' }], messageId: '<p1@example.invalid>' }, internalDate: '2026-11-25T02:00:00.000Z', flags: new Set<string>() };
-      },
-      async logout() { logouts++; },
-    };
+    // Each connection gets its own server state, as it would on a real one, and the count of
+    // logouts is shared so the test can check that every connection was closed.
+    const inner = fakeMailServer({ folders: [{ path: 'INBOX', messages: [{
+      uid: 7, envelope: { subject: '工资条', from: [{ address: 'payroll@example.invalid' }], messageId: '<p1@example.invalid>' },
+      internalDate: '2026-11-25T02:00:00.000Z', flags: new Set<string>(),
+    }] }], fail: { list: options.failList } });
+    const client: ImapClient = { ...inner.client, async logout() { logouts++; await inner.client.logout(); } };
     clients.push(client);
     return client;
   };

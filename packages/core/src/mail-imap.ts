@@ -163,11 +163,20 @@ export function hasAttachments(structure: unknown): boolean {
   return walk(structure);
 }
 
+/** How much of one message a read takes. A message above it is reported as too large rather
+ *  than cut short, because half a message reads as a whole one. Attachments are fetched on
+ *  their own, so a large message can still be read part by part. */
+export const MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
+
 /** The part of the mail library this uses. A stand-in can be given in its place. */
 export interface ImapClient {
   list(): Promise<Array<{ path: string; name: string; flags: Set<string>; specialUse?: string }>>;
-  mailboxOpen(path: string): Promise<{ path?: string; totalCount?: number; unseenCount?: number }>;
+  /** Opens a folder. Read-only, because nothing here changes a message: the workbench does
+   *  not mark mail as read, and a read-only open keeps the server from letting it. */
+  mailboxOpen(path: string, options?: { readOnly?: boolean }): Promise<{ path?: string; totalCount?: number; unseenCount?: number }>;
   fetch(range: string, query: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+  /** Streams one part of one message, decoded. Resolves without content when there is none. */
+  download(uid: number, part: string, options: { uid: boolean; maxBytes: number }): Promise<{ content?: AsyncIterable<Uint8Array>; meta?: Record<string, unknown> }>;
   logout(): Promise<void>;
 }
 
@@ -201,7 +210,7 @@ export async function readMailboxes(account: MailAccount, signal: AbortSignal, o
       const role = roleOf(box.path, box.flags, box.specialUse);
       if (!openedFolders.includes(box)) { mailboxes.push({ name: box.path, role, unseen: 0, total: 0 }); continue; }
       let opened: Awaited<ReturnType<ImapClient['mailboxOpen']>>;
-      try { opened = await client.mailboxOpen(box.path); }
+      try { opened = await client.mailboxOpen(box.path, { readOnly: true }); }
       catch (error) {
         // A folder that cannot be opened is not an account failure. It is listed without
         // counters, so the owner still sees it.

@@ -14,6 +14,7 @@ type Message = Record<string, unknown>;
 /** A stand-in server. It records what was opened and read, and answers from what it was given. */
 function server(boxes: Box[], messages: Record<string, Message[]> = {}, options: { failOpen?: string[]; failList?: Error; failLogout?: Error } = {}) {
   const opened: string[] = [];
+  const readOnly: boolean[] = [];
   // The folder that is selected now. fetch() reads from it, as it does on a real server.
   let selected: string | undefined;
   const fetched: string[] = [];
@@ -23,8 +24,9 @@ function server(boxes: Box[], messages: Record<string, Message[]> = {}, options:
       if (options.failList) throw options.failList;
       return boxes.map(box => ({ path: box.path, name: box.path.split('/').pop()!, flags: new Set<string>() }));
     },
-    async mailboxOpen(path: string) {
+    async mailboxOpen(path: string, openOptions = {}) {
       opened.push(path);
+      readOnly.push(openOptions.readOnly === true);
       if (options.failOpen?.includes(path)) throw new Error('Mailbox does not exist');
       const box = boxes.find(item => item.path === path);
       if (!box) throw new Error('Nonexistent');
@@ -35,9 +37,12 @@ function server(boxes: Box[], messages: Record<string, Message[]> = {}, options:
       fetched.push(range);
       for (const message of messages[selected ?? ''] ?? []) yield message;
     },
+    // Listing folders never downloads an attachment. The method is here because the
+    // connection type has it, and this test has no attachment to give.
+    async download() { return {}; },
     async logout() { loggedOut++; if (options.failLogout) throw options.failLogout; },
   };
-  return { client, opened, fetched, loggedOut: () => loggedOut };
+  return { client, opened, readOnly, fetched, loggedOut: () => loggedOut };
 }
 
 const envelope = (subject: string, extra: Record<string, unknown> = {}) => ({ subject, from: [{ name: '张三', address: 'zhang@example.invalid' }], to: [{ address: 'a@qq.com' }], messageId: '<m1@example.invalid>', ...extra });
@@ -67,6 +72,9 @@ test('按角色打开常用文件夹读计数，只读收件箱的最新邮件�
   ]);
   // The inbox is the only folder whose messages are read, from its newest fifty.
   assert.deepEqual(s.fetched, ['11:*']);
+  // Every folder is opened read-only, so the server itself keeps the workbench from
+  // changing a message while it reads.
+  assert.deepEqual(s.readOnly, [true, true, true]);
   assert.equal(result.messages.length, 2);
   assert.equal(result.messages[0]!.subject, '第一封 折行的主题', 'a folded subject becomes one line');
   assert.deepEqual(result.messages[0]!.from, { name: '张三', email: 'zhang@example.invalid' });
