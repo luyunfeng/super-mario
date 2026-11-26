@@ -1294,6 +1294,29 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           }
           return json(res, 200, result);
         }
+        // The Git state of a bound project, and the writes the page makes to it. The computer
+        // and the directory are the project's binding, as for reading and writing files.
+        const projectGit = path.match(/^\/api\/v1\/projects\/([^/]+)\/git$/);
+        if (projectGit && (method === 'GET' || method === 'POST')) {
+          res.setHeader('cache-control', 'no-store');
+          const project = app.projects.list().find(p => p.id === decodeURIComponent(projectGit[1]!));
+          if (!project || project.archivedAt) throw new InputError('项目不存在', 404);
+          if (!project.workspace) throw new InputError('项目尚未绑定电脑目录', 409);
+          const machine = machines.list().find(m => m.id === project.workspace!.machineId);
+          if (!machine?.online) throw new InputError('绑定电脑已离线', 503);
+          const methodWanted = method === 'GET' ? 'workspace.git.status' : 'workspace.git.write';
+          if (!machine.capabilities.includes(methodWanted)) throw new InputError('请升级绑定电脑的代理以操作 Git', 409);
+          const input = method === 'GET' ? {} : await body(req, 8 * 1024) as Record<string, unknown>;
+          if (method === 'POST' && Object.keys(input).some(key => !['op', 'path', 'message'].includes(key))) throw new InputError('Git 操作的参数无效');
+          let result: Json;
+          try { result = await machines.call(machine.id, methodWanted, { cwd: project.workspace.cwd, ...input }, { timeoutMs: 20_000 }); }
+          catch (error) {
+            // Git's own refusal of the operation is the owner's to read, not a fault of the computer.
+            if (error instanceof MachineError && error.status === 502) throw new InputError(error.message, 409);
+            throw error;
+          }
+          return json(res, 200, result);
+        }
         if(projectWorkspace){const id=decodeURIComponent(projectWorkspace[1]);
           if (projectWorkspace[2] === 'workspace' && method === 'GET') {
             const cursors = (['at', 'before', 'after'] as const).flatMap(kind => url.searchParams.getAll(kind).map(value => ({ kind, id: value })));

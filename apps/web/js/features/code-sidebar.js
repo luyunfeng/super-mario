@@ -36,6 +36,16 @@ export function createCodeSidebar({ api, store }) {
   // Editing a file: what was read, and the editor for it. A file can be saved only as it was read.
   const editor = h('div', { class: 'stack code-sidebar__edit', 'aria-label': '编辑文件', hidden: true });
   let editing = null;
+  // The Git state of the project: what is staged, what is not, and a commit of what is staged.
+  const gitPanel = h('section', { class: 'stack code-sidebar__git', 'aria-label': 'Git' });
+  // Announced as it changes, as a status is, without taking the status role the file's own
+  // reading line has: one status per panel keeps both readable.
+  const gitStatus = h('p', { class: 'small muted', 'aria-live': 'polite' });
+  const gitList = h('ul', { class: 'list', 'aria-label': '改动' });
+  const gitMessage = TextArea({ 'aria-label': '提交说明', rows: 2, placeholder: '这次改了什么' });
+  const gitCommit = Button({ label: '提交已暂存的改动', size: 'sm', kind: 'primary', onClick: () => commit() });
+  const gitRefresh = Button({ label: '刷新 Git 状态', size: 'sm', onClick: () => readGit() });
+  gitPanel.append(h('h3', null, 'Git'), h('div', { class: 'row' }, gitRefresh), gitStatus, gitList, gitMessage, gitCommit);
   const edit = Button({ label: '编辑', size: 'sm', onClick: () => { if (editing) showEditor(); } });
   const save = Button({ label: '保存到电脑', size: 'sm', kind: 'primary', onClick: () => saveFile() });
   const undo = Button({ label: '撤销上次保存', size: 'sm', onClick: () => undoFile() });
@@ -57,8 +67,8 @@ export function createCodeSidebar({ api, store }) {
   }
   const el = h('aside', { class: 'code-sidebar', 'aria-label': '项目代码', hidden: true },
     h('div', { class: 'row row--between' }, h('h2', null, '项目代码'), Button({ label: '关闭代码', size: 'sm', onClick: () => { el.hidden = true; opened = false; } })), title, body);
-  body.append(crumbs, tree, status, h('div', { class: 'row' }, fileBtn, diffBtn, edit), output, editor);
-  const toggle = Button({ label: '查看代码', size: 'sm', onClick: () => { opened = !opened; el.hidden = !opened; if (opened) void read('tree', ''); } });
+  body.append(crumbs, tree, status, h('div', { class: 'row' }, fileBtn, diffBtn, edit), output, editor, gitPanel);
+  const toggle = Button({ label: '查看代码', size: 'sm', onClick: () => { opened = !opened; el.hidden = !opened; if (opened) { void read('tree', ''); void readGit(); } } });
   syncModeButtons();
   function project() { return store.view.snapshot?.projects?.find(p => p.id === projectId); }
   function sync() {
@@ -71,7 +81,7 @@ export function createCodeSidebar({ api, store }) {
       replace(crumbs); replace(tree); output.textContent = ''; status.textContent = '';
       // Another project: the file being edited belongs to the one before.
       editing = null; edit.disabled = true; undo.disabled = true; editor.hidden = true;
-      if (opened && p?.workspace) void read('tree', '');
+      if (opened && p?.workspace) { void read('tree', ''); void readGit(); }
     }
   }
   async function read(kind, path) {
@@ -172,6 +182,47 @@ export function createCodeSidebar({ api, store }) {
     } catch (error) {
       feedback.textContent = error?.status === 409 ? `没有撤销：${error.message}` : '撤销失败或结果未知，请重新读取文件核对。';
       undo.disabled = false;
+    }
+  }
+  async function readGit() {
+    if (!project()?.workspace) return;
+    const stamp = sequence;
+    gitStatus.textContent = '正在读取 Git 状态…';
+    try {
+      const value = await api.get(`/projects/${encodeURIComponent(projectId)}/git`);
+      if (stamp !== sequence) return;
+      renderGit(value);
+    } catch (error) {
+      if (stamp === sequence) { gitStatus.textContent = `Git 状态读取失败：${error.message}`; replace(gitList); }
+    }
+  }
+  function renderGit(value) {
+    const staged = Array.isArray(value.staged) ? value.staged : [], unstaged = Array.isArray(value.unstaged) ? value.unstaged : [];
+    gitStatus.textContent = value.branch ? `分支 ${value.branch} · 已暂存 ${staged.length} 个，未暂存 ${unstaged.length} 个` : '这个目录还没有提交，Git 状态未知。';
+    const row = (change, isStaged) => h('li', { class: 'item' },
+      h('div', { class: 'row row--between row--wrap' },
+        h('code', { class: 'small', title: change.path }, change.path), h('span', { class: 'muted small' }, change.change),
+        Button({ label: isStaged ? '取消暂存' : '暂存', size: 'sm', onClick: async (event, button) => {
+          button.disabled = true;
+          try { renderGit(await api.post(`/projects/${encodeURIComponent(projectId)}/git`, { op: isStaged ? 'unstage' : 'stage', path: change.path })); }
+          catch (error) { gitStatus.textContent = `${isStaged ? '取消暂存' : '暂存'}失败：${error.message}`; button.disabled = false; }
+        } })));
+    replace(gitList, [...staged.map(change => row(change, true)), ...unstaged.filter(change => !staged.some(other => other.path === change.path)).map(change => row(change, false))]);
+    gitCommit.disabled = staged.length === 0;
+  }
+  async function commit() {
+    if (!project()?.workspace) return;
+    const message = gitMessage.value.trim();
+    if (!message) { gitMessage.focus(); return; }
+    gitCommit.disabled = true;
+    try {
+      const value = await api.post(`/projects/${encodeURIComponent(projectId)}/git`, { op: 'commit', message });
+      gitMessage.value = '';
+      renderGit(value);
+      gitStatus.textContent = `已提交：${value.summary}`;
+    } catch (error) {
+      gitStatus.textContent = `提交失败：${error.message}`;
+      gitCommit.disabled = false;
     }
   }
   return { el, toggle, openFile, show(id) { projectId = id || ''; sync(); }, update: sync };

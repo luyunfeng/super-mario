@@ -8,6 +8,7 @@ import { createGithubNode } from '../../../plugins/github-node.ts';
 import { createMailAttachmentNode } from './mail-attachment.ts';
 import { createMachineStorageNode } from './machine-storage.ts';
 import { createWorkspaceWrite } from '../../../plugins/workspace-write.ts';
+import { createWorkspaceGitWrite } from '../../../plugins/workspace-git-write.ts';
 import { createMachineNetworkNode } from './machine-network.ts';
 import { createMachineResourcesNode } from './machine-resources.ts';
 import { createTerminalHost } from '../../../plugins/terminal-host.ts';
@@ -159,5 +160,8 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
     // Writing a file of a bound project from the page, and undoing it. What was replaced is kept
     // under the agent's own data directory for the undo.
     { id: 'workspace-write', handlers: createWorkspaceWrite({ dataDir }).handlers },
+    // The Git writes the page makes in a bound project: stage, unstage, commit. Nothing is
+    // forced, and pushing is not here.
+    { id: 'workspace-git-write', handlers: createWorkspaceGitWrite().handlers },
   ]);
 }
