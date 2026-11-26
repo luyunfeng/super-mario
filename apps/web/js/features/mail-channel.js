@@ -11,21 +11,31 @@ const path = id => '/mail/accounts/' + encodeURIComponent(id);
 
 export function createMailChannel({ api, store }) {
   let accounts = [];
+  let connector = null;
+  // What the owner chose in the folders, kept apart from what was saved so that a failed
+  // save does not throw the choice away.
+  let chosenFolders = null;
   let error = '';
   let busy = '';
+  let saving = false;
   let seq = 0;
   const body = h('div', { class: 'stack' });
   const status = h('p', { role: 'status', class: 'small muted' });
+  // The switch for mail going into the inbox, and which folders. It comes before the
+  // accounts, because it is what the owner comes here to decide.
+  const toInbox = h('div', { class: 'stack' });
   const card = Card({ id: 'channel-mail', title: '邮箱', sub: '读取邮箱的文件夹和最新邮件。密码加密后留在工作台，不回显。',
-    tools: Button({ label: '添加邮箱', icon: 'plus', size: 'sm', onClick: () => edit() }), body: [body, status] });
+    tools: Button({ label: '添加邮箱', icon: 'plus', size: 'sm', onClick: () => edit() }), body: [toInbox, body, status] });
 
   async function load() {
     const stamp = ++seq;
     try {
-      const value = await api.get('/mail/accounts');
+      // Both are read together. A failure of either is a failure to read this page.
+      const [value, state] = await Promise.all([api.get('/mail/accounts'), api.get('/mail/connector').catch(() => null)]);
       if (stamp !== seq) return;
       if (!Array.isArray(value)) throw Error('响应格式无效');
-      accounts = value; error = '';
+      accounts = value; connector = state; error = '';
+      chosenFolders = null;
     } catch (cause) {
       if (stamp !== seq) return;
       error = cause.message;
@@ -146,7 +156,66 @@ export function createMailChannel({ api, store }) {
       messages.length > 8 && h('p', { class: 'small muted' }, `只显示最新 8 封，共读取 ${messages.length} 封。`));
   }
 
+  /** The switch for mail going into the inbox, and the folders it comes from.
+   *
+   *  It is off until the owner turns it on, so that mail does not start arriving unasked.
+   *  Turning it on reads at once, so the owner sees right away whether it works. */
+  function paintToInbox() {
+    if (!connector) { replace(toInbox, h('p', { class: 'small muted' }, '读取「邮件进收件箱」的设置失败。')); return; }
+    const state = connector;
+    // What is shown is what the owner chose, or what was saved when they chose nothing yet.
+    const saved = state.folders?.length ? state.folders : ['INBOX'];
+    const shown = chosenFolders ?? saved;
+    // The folders offered are the usual ones the last read found, over every account.
+    const offered = new Map();
+    for (const box of state.mailboxes ?? []) offered.set(box.name, (offered.get(box.name) ?? []).concat(box.account));
+    const options = [[ 'INBOX', '收件箱' ], ...[...offered].filter(([name]) => name !== 'INBOX').map(([name, owners]) => [name, name + '（' + owners.join('、') + '）'])];
+    const folders = h('div', { class: 'stack small' }, options.map(([name, text]) => {
+      const box = h('input', { type: 'checkbox', checked: shown.includes(name) });
+      box.addEventListener('change', () => {
+        const next = new Set(chosenFolders ?? saved);
+        if (box.checked) next.add(name); else next.delete(name);
+        // At least one folder is always taken. A list with nothing in it would mean the inbox
+        // on the server, which is not what unchecking the last box looks like.
+        if (!next.size) { box.checked = true; return; }
+        chosenFolders = [...next];
+      });
+      return h('label', { class: 'check' }, box, h('span', null, text));
+    }));
+    const note = h('p', { class: 'small', role: 'status' });
+    const save = Button({ label: '保存', kind: 'primary', size: 'sm', onClick: async () => {
+      // Nothing is redrawn while the save is out. The ticks and the note are what the owner
+      // is looking at, and a redraw would replace them with the saved state.
+      if (saving) return;
+      saving = true; note.textContent = ''; save.disabled = true;
+      try {
+        // The folders are sent only when the owner chose some. Left out, the server keeps
+        // what was saved, so turning the switch off and on does not forget the choice.
+        connector = await api.put('/mail/connector', { enabled: state.enabled, ...(chosenFolders ? { folders: chosenFolders } : {}) });
+        chosenFolders = null;
+        store.refresh();
+        // What was saved is now what is shown. This is a redraw after a success, when there
+        // is nothing of the owner's left on the screen to keep.
+        paintToInbox();
+      } catch (cause) { note.textContent = '没有保存：' + cause.message; }
+      finally { saving = false; save.disabled = false; }
+    } });
+    const enabled = h('input', { type: 'checkbox', checked: state.enabled });
+    enabled.addEventListener('change', () => { state.enabled = enabled.checked; });
+    replace(toInbox, h('details', { open: true },
+      h('summary', null, '邮件进收件箱'),
+      h('div', { class: 'stack' },
+        h('label', { class: 'check' }, enabled, h('span', null, '把未读邮件放进收件箱')),
+        h('p', { class: 'small muted' }, '同一话题的回复合成一条。打开后每 3 分钟读一次，读取不会把邮件标记为已读。'),
+        state.enabled ? h('div', { class: 'stack' }, h('span', { class: 'small' }, '收哪些文件夹'), folders) : null,
+        (state.failed ?? []).length ? h('p', { class: 'small', role: 'alert' },
+          '这些邮箱没有读到，收件箱里暂时没有它们的新邮件：' + state.failed.map(item => item.name).join('、')) : null,
+        state.lastError && !state.failed?.length ? h('p', { class: 'small', role: 'alert' }, state.lastError) : null,
+        h('div', { class: 'row row--wrap' }, save, note))));
+  }
+
   function paint() {
+    paintToInbox();
     if (error) { replace(body, h('p', { class: 'small', role: 'alert' }, '无法读取邮箱账号：' + error)); status.textContent = ''; return; }
     if (!accounts.length) {
       replace(body, h('p', { class: 'small muted' }, '还没有添加邮箱。添加后可以在这里检查连接，并查看文件夹和最新邮件。'));

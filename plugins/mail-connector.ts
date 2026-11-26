@@ -103,7 +103,10 @@ export async function runMailConnector(actions: MailConnectorActions, signal: Ab
       }
     }
     if (things.length) await actions.ingest(things);
-    actions.save({ ...actions.state(), lastRunAt: new Date().toISOString(), lastError: undefined, failed });
+    // The folders are kept so that the page can offer them to be chosen. They are the ones
+    // of a usual kind, because those are the ones mail is kept in by role.
+    const mailboxes = reads.flatMap(read => read.mailboxes.filter(box => box.role !== 'other').map(box => ({ account: read.account.name, name: box.name })));
+    actions.save({ ...actions.state(), lastRunAt: new Date().toISOString(), lastError: undefined, failed, mailboxes });
   } catch (error) {
     // A read that was stopped is not a failure of a mailbox, and says nothing about the mail.
     if (signal.aborted) return;

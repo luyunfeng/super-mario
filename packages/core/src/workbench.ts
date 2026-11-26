@@ -1240,8 +1240,8 @@ export async function createWorkbench(config: AppConfig) {
     const state = mailConnectorState();
     return { enabled: state.enabled, folders: state.folders ?? [], lastRunAt: state.lastRunAt, lastError: state.lastError,
       failed: state.failed ?? [],
-      // The folders the owner can choose from, as the last read of each mailbox found them.
-      mailboxes: mailReader.state().flatMap(entry => (entry.mailboxes ?? []).filter(box => box.role !== 'other').map(box => ({ account: entry.account.name, name: box.name }))),
+      // The folders the owner can choose from, as the connector's last read found them.
+      mailboxes: state.mailboxes ?? [],
       accounts: mailAccounts.list().length };
   }
   function mailConnectorConfigure(input: Record<string, unknown>) {

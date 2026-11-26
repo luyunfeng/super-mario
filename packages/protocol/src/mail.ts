@@ -129,6 +129,9 @@ export interface MailConnectorState {
   /** Mailboxes that could not be read on the last run, so the owner knows the inbox is
    *  behind for them. Their mail is not taken for gone. */
   failed?: Array<{ id: string; name: string }>;
+  /** The folders of a usual kind that the last read found in each mailbox, so that the
+   *  owner can choose which of them mail comes from. */
+  mailboxes?: Array<{ account: string; name: string }>;
 }
 
 /** The service the mail connector offers that reads the mailboxes now. Named as a plugin's
