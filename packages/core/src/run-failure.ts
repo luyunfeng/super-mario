@@ -80,10 +80,23 @@ export function failureText(run: Pick<Run, 'status' | 'failure'>): string | unde
   return `${kinds[kind]}。失败阶段：${stages[stage]}。`;
 }
 
+/** A home directory with the user's name in it: /Users/x/, /home/x/, /data00/home/x/,
+ *  /var/home/x/, /root, C:\Users\x\. The whole directory becomes ~. It is made afresh for
+ *  each use, because a pattern that replaces every match keeps where it got to. */
+function homeDir() {
+  return /(\/Users\/|\/home\/|\/data\d*\/home\/|\/var\/home\/|\/root(?![\w.-])|[A-Za-z]:\\Users\\|[A-Za-z]:\/Users\/)([^\/\\\s"'<>]*)/gi;
+}
+/** A path with the user's home directory in it replaced by ~, so that the name is not carried
+ *  out with it. A path that is not under a home directory is left as it is. */
+export function withoutHome(path: string): string {
+  return path.replace(homeDir(), '~');
+}
+
 /** A report someone can read or pass on without the prompt, the output or the error's words.
  *  It has only what the run already keeps as structure: what ran, when, on what build, and how
  *  it stopped. The working directory and the branch are kept, because finding a failure needs
- *  them; the prompt and the output are not, because they are the person's own content. */
+ *  them, with the home directory replaced by ~; the prompt and the output are not, because they
+ *  are the person's own content. */
 export interface RunDiagnostics {
   format: 'super-mario.run-diagnostics';
   version: 1;
@@ -112,7 +125,7 @@ export function runDiagnostics(run: Run, now = new Date()): RunDiagnostics {
       ...(run.machineId && { machineId: run.machineId }), createdAt: run.createdAt, updatedAt: run.updatedAt,
       ...(run.build && { build: run.build }), ...(failure ? { failure } : undefined),
       durationMs: Math.max(0, Date.parse(run.updatedAt) - Date.parse(run.createdAt)),
-      ...(cwd && { cwd }), ...(worktree && { worktree: { source: worktree.source, ...(worktree.branch && { branch: worktree.branch }), ...(worktree.base && { base: worktree.base }), ...(worktree.removedAt && { removedAt: worktree.removedAt }), ...(worktree.branchDeletedAt && { branchDeletedAt: worktree.branchDeletedAt }) } }),
+      ...(cwd && { cwd: withoutHome(cwd) }), ...(worktree && { worktree: { source: withoutHome(worktree.source), ...(worktree.branch && { branch: worktree.branch }), ...(worktree.base && { base: worktree.base }), ...(worktree.removedAt && { removedAt: worktree.removedAt }), ...(worktree.branchDeletedAt && { branchDeletedAt: worktree.branchDeletedAt }) } }),
     },
   };
 }

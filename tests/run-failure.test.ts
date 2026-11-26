@@ -7,7 +7,7 @@ import { startAgentNode } from '../apps/agent-node/src/index.ts';
 import { startServer } from '../apps/server/src/index.ts';
 import { buildInfo } from '../packages/core/src/build-info.ts';
 import { MachineError } from '../packages/core/src/machines.ts';
-import { failureKind, failureStage, type RunDiagnostics } from '../packages/core/src/run-failure.ts';
+import { failureKind, failureStage, withoutHome, type RunDiagnostics } from '../packages/core/src/run-failure.ts';
 import type { NodeHandler, TerminalHost } from '../packages/plugin-sdk/src/index.ts';
 import type { Run } from '../packages/protocol/src/index.ts';
 import { createExecutionServices } from '../plugins/executors.ts';
@@ -160,6 +160,9 @@ test('诊断报告有编号、电脑、构建、失败类别和阶段，没有�
     assert.ok(row.status === 'failed' || row.status === 'unknown', row.status);
   });
   const done = await f.read(run.id);
+  // A directory under a home directory is written with ~ in place of the user's name.
+  const homeRun = await f.web<Run>('runs', 'POST', { executorId: f.machineId + '/pi', executionMode: 'task', prompt: '合成', doneWhen: '有结果', expectMinutes: 1, cwd: '/home/synthetic-person/project' });
+  void homeRun;
   const report = await f.web<RunDiagnostics>(`runs/${run.id}/diagnostics`);
   assert.equal(report.format, 'super-mario.run-diagnostics');
   assert.equal(report.version, 1);
@@ -181,4 +184,21 @@ test('诊断报告有编号、电脑、构建、失败类别和阶段，没有�
   assert.equal('output' in report.run, false);
   assert.equal('error' in report.run, false);
   assert.equal(report.run.failure && typeof report.run.failure === 'object', true);
+  const homeReport = await f.web<RunDiagnostics>(`runs/${homeRun.id}/diagnostics`);
+  assert.equal(homeReport.run.cwd, '~/project');
+  assert.equal(JSON.stringify(homeReport).includes('synthetic-person'), false);
+});
+
+test('报告里的路径不带走家目录里的用户名', () => {
+  assert.equal(withoutHome('/data00/home/someone/project'), '~/project');
+  assert.equal(withoutHome('/home/alice/code'), '~/code');
+  assert.equal(withoutHome('/Users/bob/dev'), '~/dev');
+  assert.equal(withoutHome('/root/work'), '~/work');
+  assert.equal(withoutHome('C:\\Users\\carol\\dev'), '~\\dev');
+  // Not a home directory: left as it is.
+  assert.equal(withoutHome('/tmp/runner'), '/tmp/runner');
+  assert.equal(withoutHome('/srv/app'), '/srv/app');
+  // The same pattern is used more than once, so it must start from the beginning each time.
+  assert.equal(withoutHome('/home/a/x'), '~/x');
+  assert.equal(withoutHome('/home/b/y'), '~/y');
 });
