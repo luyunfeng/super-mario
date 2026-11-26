@@ -1,4 +1,5 @@
 import { h, replace } from '../lib/dom.js';
+import { copyText } from '../lib/clipboard.js';
 import { formatDate, runStatus, uuid } from '../lib/format.js';
 import { confirmDialog, openDrawer } from '../ui/overlay.js';
 import { renderDiffLines } from './code-sidebar.js';
@@ -170,6 +171,11 @@ export function openWorktreeStatus(options) {
       const value = await api.get('/runs/' + encodeURIComponent(item.id) + '/worktree-status?' + query);
       if (!active()) return;
       replace(area, h('strong', null, value.branch ?? '分离的 HEAD'), h('code', null, value.cwd),
+        // The branch and the directory are what the owner needs elsewhere: in a terminal, in
+        // another tool, or to name the worktree when asking for another run in it.
+        h('div', { class: 'row row--wrap' },
+          value.branch && copyButton('复制分支名', value.branch),
+          copyButton('复制目录路径', value.cwd)),
         h('p', null, '当前提交 ', h('code', null, value.head.slice(0, 10)), ' · 来源提交 ', h('code', null, value.sourceHead.slice(0, 10))),
         h('p', null, `有 ${value.unmerged} 个提交尚未进入来源目录当前 HEAD。`),
         h('strong', null, `未提交文件（含未跟踪）：${value.total}`),
@@ -211,6 +217,15 @@ export function openWorktreeStatus(options) {
     } catch (error) { if (active()) replace(area, h('p', null, error.message), Button({ label: '重试', onClick: () => load() })); }
   }
   void load();
+}
+
+/** A copy button that says what happened in place, so the owner need not look elsewhere. */
+function copyButton(label, text) {
+  return h('button', { type: 'button', class: 'btn btn--ghost btn--sm', onclick: async event => {
+    const button = event.currentTarget;
+    try { await copyText(text); button.textContent = '已复制'; }
+    catch (error) { button.textContent = '复制失败：' + error.message; }
+  } }, label);
 }
 
 export function compareRuns({ run, runs, projectId, router, executorName, progressView, api, store }) {

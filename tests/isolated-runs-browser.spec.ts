@@ -131,6 +131,14 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await peerCard.getByRole('button', {name:'检查此执行的工作树'}).click();
   const peerTree = page.getByRole('dialog', {name:'工作树状态'});
   await expect(peerTree).toContainText(peer.cwd!);
+  // The branch and the directory can be copied for use in a terminal or another tool.
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await peerTree.getByRole('button', { name: '复制分支名' }).click();
+  await expect(peerTree.getByRole('button', { name: '已复制' })).toHaveCount(1);
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), peer.worktree!.branch);
+  await peerTree.getByRole('button', { name: '复制目录路径' }).click();
+  await expect(peerTree.getByRole('button', { name: '已复制' })).toHaveCount(2);
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), peer.cwd);
   await peerTree.getByRole('button', {name:'关闭',exact:true}).click();
   await expect(peerCard).toBeVisible();
   await page.getByRole('link', { name: '关闭对比' }).click();
