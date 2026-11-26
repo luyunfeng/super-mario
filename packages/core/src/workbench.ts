@@ -51,7 +51,7 @@ import { createSealedStore } from './sealed-store.ts';
 import { createMailAccounts } from './mail-accounts.ts';
 import { createMailReader } from './mail-reader.ts';
 import { executeMailSend, MAIL_SEND_APPROVAL, proposeMailSend } from './mail-outbox.ts';
-import { classifyImapError, connectionOptions, ImapError, libraryOpen, type ImapClient, type OpenImap } from './mail-imap.ts';
+import { classifyImapError, connectionOptions, ImapError, libraryOpen, setMessageFlags, type ImapClient, type MessageFlagChange, type OpenImap } from './mail-imap.ts';
 import { MessageError, readAttachment, readMessage } from './mail-message.ts';
 import { searchFolder } from './mail-search.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
@@ -1234,6 +1234,36 @@ export async function createWorkbench(config: AppConfig) {
     } catch (error) {
       if (signal.aborted) throw error;
       throw error instanceof MessageError ? error : classifyImapError(error);
+    } finally { await client?.logout().catch(() => {}); }
+  }
+  /** Changes the seen or the starred flag of the email an inbox item points at.
+   *
+   *  Only those two flags can be changed, and only through an item the owner has: the
+   *  mailbox and the message come from the item. This is the one place that writes to a
+   *  mailbox besides sending. */
+  async function setInboxMailFlags(id: string, change: MessageFlagChange, signal: AbortSignal) {
+    // Anything that is not one of the two flags is refused before a connection is made.
+    const extra = Object.keys(change).find(key => key !== 'seen' && key !== 'flagged');
+    if (extra) throw new InputError('邮件标记参数无效：' + extra);
+    if (typeof change.seen !== 'boolean' && typeof change.flagged !== 'boolean') throw new InputError('请说明要改动哪个标记');
+    for (const name of ['seen', 'flagged'] as const) if (change[name] !== undefined && typeof change[name] !== 'boolean') throw new InputError('邮件标记须为是或否');
+    const item = inbox.list().find(entry => entry.id === id);
+    const target = item?.origin?.mail;
+    if (!item || !target) throw new InputError('这条收件不是邮件', 404);
+    if (!mailAccounts.list().some(account => account.id === target.account)) throw new InputError('这封邮件所在的邮箱已移除', 404);
+    const account = mailAccounts.get(target.account);
+    const password = await mailAccounts.password(target.account);
+    if (password === undefined) throw new ImapError('authentication', '这个账号还没有密码，请重新填写。');
+    let client;
+    try {
+      client = await mailOpen(connectionOptions(account, password));
+      await setMessageFlags(client, target, change, signal);
+      // The item says whether the mail was read when it came in. What the owner just did
+      // is what counts now.
+      return { seen: change.seen, flagged: change.flagged };
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw error instanceof InputError || error instanceof ImapError ? error : classifyImapError(error);
     } finally { await client?.logout().catch(() => {}); }
   }
   function mailConnectorView() {
@@ -3644,7 +3674,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, searchMail, mailTool, proposeMail, MAIL_SEND_APPROVAL,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, proposeMail, MAIL_SEND_APPROVAL,
     mailConnectorView, mailConnectorConfigure, mailPoll: async () => { await plugins.invocations.use(MAIL_POLL_SERVICE, {}); },
     mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },

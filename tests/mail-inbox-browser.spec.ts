@@ -9,7 +9,7 @@ import { fakeMailServer } from './mail-fixture.ts';
 const encoded = (value: string) => '=?UTF-8?B?' + Buffer.from(value, 'utf8').toString('base64') + '?=';
 const b64 = (value: string) => Buffer.from(value, 'utf8').toString('base64');
 
-test('邮件进入收件箱：列表里能看到，点开后读到正文和附件，读取不把邮件标记为已读', async t => {
+test('邮件进入收件箱：列表里能看到，点开后读到正文和附件；打开即标为已读，可以改回未读和加星标', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'mario-mail-inbox-browser-'));
   const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: join(dir, 'data'), demo: true, token: 'test-mail-inbox' });
   // A message with one file attached, as it comes over the wire.
@@ -69,14 +69,26 @@ test('邮件进入收件箱：列表里能看到，点开后读到正文和附�
   expect(taken!).not.toContain('test-mail-inbox');
   // Nothing in the message is rendered as markup, and the password is nowhere on the page.
   expect(await page.content()).not.toContain('an-offline-code');
-  // Reading left the message as it was: the folder was opened read-only and nothing was stored.
-  assertReadOnly(work);
+  // Reading the message and taking its attachment opened the folder read-only. Only the
+  // change of a flag opens it for writing, and nothing was put into a folder.
+  const writing = work.opened.filter(opened => !opened.readOnly);
+  expect(work.opened.length).toBeGreaterThanOrEqual(writing.length + 2);
+  expect(work.appended.length).toBe(0);
+  // Opening the message marked it read, by adding that one flag.
+  await expect.poll(() => work.flagChanges).toContainEqual({ remove: false, range: '1', flags: [String.fromCharCode(92) + 'Seen'], uid: true });
+  expect(writing.length).toBeGreaterThanOrEqual(1);
+  await expect(body.getByRole('button', { name: '标为未读' })).toBeVisible();
+
+  // The owner can put it back and star it. Each changes that one flag in the mailbox.
+  await body.getByRole('button', { name: '标为未读' }).click();
+  await expect(body.getByRole('button', { name: '标为已读' })).toBeVisible();
+  await body.getByRole('button', { name: '加星标' }).click();
+  await expect(body.getByRole('button', { name: '取消星标' })).toBeVisible();
+  await expect.poll(() => work.flagChanges.map(change => [change.remove, change.flags[0]])).toEqual([
+    [false, String.fromCharCode(92) + 'Seen'], [true, String.fromCharCode(92) + 'Seen'], [false, String.fromCharCode(92) + 'Flagged'],
+  ]);
+  // No other flag was ever named.
+  expect(work.flagChanges.every(change => change.flags.length === 1)).toBe(true);
   expect(pageErrors).toEqual([]);
   await page.close();
 });
-
-function assertReadOnly(work: ReturnType<typeof fakeMailServer>) {
-  // Every folder the page's read opened was opened read-only.
-  if (!work.opened.length) throw new Error('the mailbox was not read');
-  for (const opened of work.opened) if (!opened.readOnly) throw new Error('a folder was opened for writing: ' + opened.path);
-}

@@ -186,6 +186,9 @@ export interface ImapClient {
   download?(uid: number, part: string, options: { uid: boolean; maxBytes: number }): Promise<{ content?: AsyncIterable<Uint8Array>; meta?: Record<string, unknown> }>;
   /** Puts a message into a folder, as a mail program keeps a copy of what it sent. */
   append?(path: string, content: Uint8Array, options: { flags: string[]; date: Date }): Promise<unknown>;
+  /** Adds or takes off flags of messages, leaving every other flag as it is. */
+  messageFlagsAdd?(range: string, flags: string[], options: { uid: boolean }): Promise<boolean>;
+  messageFlagsRemove?(range: string, flags: string[], options: { uid: boolean }): Promise<boolean>;
   logout(): Promise<void>;
 }
 
@@ -195,6 +198,34 @@ export interface FullImapClient extends ImapClient {
   search(query: Record<string, unknown>, options: { uid: boolean }): Promise<number[] | false | undefined>;
   download(uid: number, part: string, options: { uid: boolean; maxBytes: number }): Promise<{ content?: AsyncIterable<Uint8Array>; meta?: Record<string, unknown> }>;
   append(path: string, content: Uint8Array, options: { flags: string[]; date: Date }): Promise<unknown>;
+  messageFlagsAdd(range: string, flags: string[], options: { uid: boolean }): Promise<boolean>;
+  messageFlagsRemove(range: string, flags: string[], options: { uid: boolean }): Promise<boolean>;
+}
+
+/** The flags of one message that the owner can change. Nothing else is touched, so a flag
+ *  a mail program set for its own use stays. */
+export type MessageFlagChange = { seen?: boolean; flagged?: boolean };
+export const MESSAGE_FLAGS: Record<keyof MessageFlagChange, string> = { seen: '\\Seen', flagged: '\\Flagged' };
+
+/** Sets the flags of one message that the owner asked to change.
+ *
+ *  Each flag is added or taken off on its own. The flags of a message are never replaced as a
+ *  whole, because a mail program keeps its own marks among them. The folder is opened for
+ *  writing here: everywhere else a folder is opened read-only, so that reading a message can
+ *  never change it. The connection is the caller's to close. */
+export async function setMessageFlags(client: ImapClient, where: { mailbox: string; uid: number }, change: MessageFlagChange, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  await client.mailboxOpen(where.mailbox);
+  signal.throwIfAborted();
+  for (const name of Object.keys(MESSAGE_FLAGS) as Array<keyof MessageFlagChange>) {
+    const wanted = change[name];
+    if (wanted === undefined) continue;
+    const set = (client as FullImapClient)[wanted ? 'messageFlagsAdd' : 'messageFlagsRemove'];
+    if (!set) throw new ImapError('unknown', '这个连接不能改动邮件的标记。');
+    // False means no message was changed: the message is gone from the folder.
+    const changed = await set.call(client, String(where.uid), [MESSAGE_FLAGS[name]], { uid: true });
+    if (!changed) throw new ImapError('not-found', '这封邮件不在了，可能已被移动或删除。');
+  }
 }
 
 /** The part of a connection that a search needs. A real connection always has it. */

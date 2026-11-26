@@ -627,6 +627,23 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           res.end(Buffer.from(file.content));
           return;
         }
+        // Changes whether the email an inbox item points at is read or starred. Only those
+        // two can be changed: anything else on the request is refused by name.
+        const inboxFlags = path.match(/^\/api\/v1\/mail\/inbox\/([^/]+)\/flags$/);
+        if (inboxFlags && method === 'POST') {
+          const input = await body(req);
+          const controller = new AbortController();
+          res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+          try { return json(res, 200, await app.setInboxMailFlags(decodeURIComponent(inboxFlags[1]!), input, controller.signal)); }
+          catch (error) {
+            if (controller.signal.aborted) return;
+            // A message that is gone is not found. Anything else that comes from the mail
+            // server is its failure and not a bad request.
+            const kind = error && typeof error === 'object' && 'failure' in error ? String(error.failure) : '';
+            const status = kind === 'not-found' ? 404 : error && typeof error === 'object' && 'status' in error ? Number(error.status) : kind ? 502 : 500;
+            throw new InputError(error instanceof Error ? error.message : '改动邮件标记失败', status);
+          }
+        }
         // An email the assistant or the page wants to send. This only asks for it: the
         // message goes out after the owner approves it.
         if (path === '/api/v1/mail/send' && method === 'POST') {

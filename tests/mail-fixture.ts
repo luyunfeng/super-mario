@@ -39,6 +39,8 @@ export type FakeServer = {
   searches: Array<{ query: Record<string, unknown>; uid: boolean }>;
   /** Every attachment download. */
   downloaded: Array<{ uid: number; part: string; maxBytes: number }>;
+  /** Every change to the flags of messages, as a mail program marks one as read. */
+  flagChanges: Array<{ remove: boolean; range: string; flags: string[]; uid: boolean }>;
   /** Every message put into a folder, as the copy of one that was sent. */
   appended: Array<{ path: string; content: Uint8Array; flags: string[]; date: Date }>;
   logouts: () => number;
@@ -88,6 +90,7 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
   for (const folder of options.folders) for (const message of folder.messages) message.envelope = envelopeOf(message);
   const downloaded: FakeServer['downloaded'] = [];
   const appended: FakeServer['appended'] = [];
+  const flagChanges: FakeServer['flagChanges'] = [];
   let logouts = 0;
   // The folder that is selected now. fetch() and download() read from it, as on a real server.
   let selected: FakeFolder | undefined;
@@ -154,6 +157,29 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
       async function * pieces() { yield bytes.slice(0, middle); yield bytes.slice(middle); }
       return { content: pieces(), meta: { size: bytes.byteLength } };
     },
+    /** Adds flags to messages, as a mail program marks one as read. Other flags stay. */
+    async messageFlagsAdd(range, flags, storeOptions) {
+      flagChanges.push({ remove: false, range, flags: [...flags], uid: storeOptions.uid });
+      let changed = false;
+      for (const message of selected?.messages ?? []) {
+        if (!inSet(message.uid, range, Math.max(0, ...(selected?.messages ?? []).map(item => item.uid)))) continue;
+        message.flags ??= new Set<string>();
+        for (const flag of flags) message.flags.add(flag);
+        changed = true;
+      }
+      return changed;
+    },
+    /** Takes flags off messages. Other flags stay. */
+    async messageFlagsRemove(range, flags, storeOptions) {
+      flagChanges.push({ remove: true, range, flags: [...flags], uid: storeOptions.uid });
+      let changed = false;
+      for (const message of selected?.messages ?? []) {
+        if (!inSet(message.uid, range, Math.max(0, ...(selected?.messages ?? []).map(item => item.uid)))) continue;
+        for (const flag of flags) message.flags?.delete(flag);
+        changed = true;
+      }
+      return changed;
+    },
     async logout() { logouts++; },
     /** Keeps what was put in a folder. A test that sends reads it back from here. */
     async append(path, content, appendOptions) {
@@ -161,7 +187,7 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
       return { path };
     },
   };
-  return { client, opened, fetched, searches, downloaded, appended, logouts: () => logouts };
+  return { client, opened, fetched, searches, downloaded, appended, flagChanges, logouts: () => logouts };
 }
 
 /** Whether a UID is in a set as a mail server writes it: one number, a range "n:m", an open

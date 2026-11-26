@@ -23,7 +23,9 @@ export function mailInboxBody(api, row) {
   if (!target) return { el: root };
   let loaded = null, busy = false, seq = 0, error = '', proposed = false, account = null;
   let downloading = '';
+  let marking = false;
   const downloadNote = h('p', { class: 'small', role: 'status' });
+  const flagNote = h('p', { class: 'small', role: 'status' });
   const body = h('div', { class: 'stack' });
   root.append(body);
   async function load() {
@@ -38,6 +40,10 @@ export function mailInboxBody(api, row) {
       // The account is needed only to reply. When it cannot be read the message is still
       // shown, and the reply is not offered.
       account = await accountOf(api, target.account).catch(() => null);
+      // Opening a message is reading it, so it is marked as read. Reading itself never marks
+      // it: this is a separate change, made because the owner opened it. When it cannot be
+      // made the message is still shown.
+      if (value.seen === false) void markFlag({ seen: true }, true);
     } catch (cause) {
       if (stamp !== seq) return;
       error = cause.message;
@@ -69,6 +75,19 @@ export function mailInboxBody(api, row) {
     } finally { downloading = ''; paint(); }
   }
 
+  /** Changes one of the two flags the owner can change. `quiet` is for the one made by
+   *  opening the message, which is not something the owner asked to see confirmed. */
+  async function markFlag(change, quiet) {
+    if (marking) return;
+    marking = true; flagNote.textContent = '';
+    try {
+      await api.post('/mail/inbox/' + encodeURIComponent(row.id) + '/flags', change);
+      if (loaded) Object.assign(loaded, change);
+    } catch (cause) {
+      if (!quiet) flagNote.textContent = '没有改动标记：' + cause.message;
+    } finally { marking = false; paint(); }
+  }
+
   function paint() {
     replace(body,
       busy && !loaded ? h('p', { class: 'small muted' }, '正在从邮箱读取…') : null,
@@ -80,6 +99,15 @@ export function mailInboxBody(api, row) {
           h('dt', null, '收件人'), h('dd', null, list(loaded.to) || '未显示'),
           ...(loaded.cc?.length ? [h('dt', null, '抄送'), h('dd', null, list(loaded.cc))] : []),
           h('dt', null, '时间'), h('dd', null, h('time', { dateTime: loaded.date }, time(loaded.date) || '未知'))),
+        // The two marks the owner can change. Opening the message has already marked it read,
+        // so the first of these puts that back.
+        h('div', { class: 'row row--wrap' },
+          Button({ label: loaded.seen ? '标为未读' : '标为已读', size: 'sm', kind: 'ghost', disabled: marking,
+            onClick: () => { void markFlag({ seen: !loaded.seen }); } }),
+          Button({ label: loaded.flagged ? '取消星标' : '加星标', size: 'sm', kind: 'ghost', disabled: marking,
+            onClick: () => { void markFlag({ flagged: !loaded.flagged }); } }),
+          // Said only when there is something to say, so that an empty status is not read out.
+          flagNote.textContent ? flagNote : null),
         // The text is put in as text. Nothing in an email is rendered as markup.
         loaded.text
           ? h('pre', { class: 'mailbox-content' }, loaded.text)
