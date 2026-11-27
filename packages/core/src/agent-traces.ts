@@ -4,6 +4,8 @@ import type { Message, Project } from '../../protocol/src/index.ts';
 export const TRACE_COLLECTION = 'agent.traces';
 const MAX_CONTENT_CHARS = 131072;
 const MAX_TURNS_PER_SESSION = 150;
+/** What a conversation is trimmed back to once it passes the limit. */
+const KEEP_AFTER_TRIM = 135;
 
 export type TraceCategory =
   | 'system'
@@ -162,17 +164,31 @@ function publicTurnTrace(trace: AgentTurnTrace): AgentTurnTrace {
   return { ...trace, runtime, contextItems, summary: summarizeTrace(contextItems) };
 }
 
-export function saveTurnTrace(store: Pick<Store, 'put' | 'list' | 'remove'>, trace: AgentTurnTrace) {
+/** How many turns are kept for one conversation, by conversation id. It is what lets a save know
+ *  whether the limit is near without reading every trace there is. */
+const TRACE_COUNT_COLLECTION = 'agent.trace-counts';
+
+export function saveTurnTrace(store: Pick<Store, 'get' | 'put' | 'list' | 'remove'>, trace: AgentTurnTrace) {
   try {
     store.put(TRACE_COLLECTION, trace.id, publicTurnTrace(trace));
+    // Reading the whole trace table costs what the table weighs, which grows with the workbench.
+    // A conversation is trimmed only once it holds more than the limit, so a count per
+    // conversation says when that is, and the table is read only then.
+    const countKey = trace.conversationId;
+    const kept = (store.get<{ n: number }>(TRACE_COUNT_COLLECTION, countKey)?.n ?? 0) + 1;
+    if (kept <= MAX_TURNS_PER_SESSION) {
+      store.put(TRACE_COUNT_COLLECTION, countKey, { n: kept });
+      return;
+    }
     const sameSession = store.list<AgentTurnTrace>(TRACE_COLLECTION)
       .filter(item => item.conversationId === trace.conversationId)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    if (sameSession.length > MAX_TURNS_PER_SESSION) {
-      for (const old of sameSession.slice(MAX_TURNS_PER_SESSION)) {
-        store.remove(TRACE_COLLECTION, old.id);
-      }
+    // Trimmed to a little under the limit, not to it: otherwise the very next save is over
+    // again, and the table would be read for every turn from here on.
+    for (const old of sameSession.slice(KEEP_AFTER_TRIM)) {
+      store.remove(TRACE_COLLECTION, old.id);
     }
+    store.put(TRACE_COUNT_COLLECTION, countKey, { n: Math.min(sameSession.length, KEEP_AFTER_TRIM) });
   } catch {
     // Isolated read-only runtimes use a messages-only store wrapper; skip trace persistence safely.
   }

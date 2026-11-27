@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStore } from '../packages/core/src/store.ts';
@@ -117,3 +118,40 @@ test('trace persistence and legacy turn reads expose only credential source and 
   store.put(TRACE_COLLECTION, legacy.id, { ...legacy, runtime: undefined });
   assert.equal(JSON.stringify(readTurnTrace(store, legacy.id)).includes(secret), false);
 });
+
+
+test('saving a turn does not read the whole trace table until a conversation passes its limit', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-traces-count-'));
+  const store = createStore(join(dir, 'test.sqlite'));
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  let wholeReads = 0;
+  const counted = {
+    get: store.get.bind(store), put: store.put.bind(store), remove: store.remove.bind(store),
+    list<T>(collection: string): T[] { if (collection === TRACE_COLLECTION) wholeReads++; return store.list<T>(collection); },
+  };
+  const turn = (conversationId: string, index: number): AgentTurnTrace => ({
+    id: conversationId + '-' + index, conversationId, userMessageId: 'u-' + index, status: 'done', provider: 'anthropic', model: 'm',
+    contextWindow: 128000, startedAt: new Date(Date.UTC(2026, 10, 27, 0, 0, index)).toISOString(), finishedAt: '', durationMs: 1,
+    userText: 'q', assistantText: 'a', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, estimated: false },
+    summary: summarizeTrace([]), contextItems: [], thinkingBlocks: [], toolCalls: [],
+  });
+  const rows = (conversationId: string) => store.list<AgentTurnTrace>(TRACE_COLLECTION).filter(trace => trace.conversationId === conversationId).length;
+  // Up to the limit, every save is a write and a small count: the table is never read.
+  for (let index = 0; index < 150; index++) saveTurnTrace(counted, turn('c1', index));
+  assert.equal(wholeReads, 0);
+  assert.equal(rows('c1'), 150);
+  // One past the limit the table is read once and trimmed back a little under it.
+  saveTurnTrace(counted, turn('c1', 150));
+  assert.equal(wholeReads, 1);
+  assert.equal(rows('c1'), 135);
+  // Fifteen more brings the count back to the limit without a read; the sixteenth reads again.
+  for (let index = 151; index < 166; index++) saveTurnTrace(counted, turn('c1', index));
+  assert.equal(wholeReads, 1);
+  saveTurnTrace(counted, turn('c1', 166));
+  assert.equal(wholeReads, 2);
+  assert.equal(rows('c1'), 135);
+  // Another conversation counts on its own and never causes a read.
+  for (let index = 0; index < 150; index++) saveTurnTrace(counted, turn('c2', index));
+  assert.equal(wholeReads, 2);
+});
+

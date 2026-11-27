@@ -92,6 +92,9 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
     if (belongs(row.value)) store.remove('conversation.last-direct-input', row.id);
   }
   for (const trace of traces) store.remove(TRACE_COLLECTION, trace.id);
+  // The count of kept turns goes with them, so that a conversation made again under the same
+  // id does not start from the old one's number.
+  store.remove('agent.trace-counts', conversationId);
   for (const record of scheduled) {
     // The schedule is independently visible. Discard the cached copy of the source message.
     const m = record.sourceMessage;
