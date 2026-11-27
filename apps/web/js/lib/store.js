@@ -5,7 +5,9 @@ export function createStore(api) {
   const listeners = new Set();
   const queueChanges = new Set();
   const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsChange: null, webConversationChange: null, workspaceBoardRevision: null, workspaceBoardFlowChange: null, savedSearchesRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, revokedAttachment: null, feishuBotChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
-  let request = 0;
+  let epoch = 0;
+  let inFlight = null;
+  let queued = false;
   let socket;
   let reconnectTimer;
   let refreshTimer;
@@ -14,25 +16,41 @@ export function createStore(api) {
   const emit = () => { for (const fn of listeners) fn(view); };
   const set = (patch) => { Object.assign(view, patch); emit(); };
 
-  async function refresh() {
-    const stamp = ++request;
-    const owner = api.draftOwner?.();
-    try {
-      const [snapshot, attention] = await Promise.all([api.get('/state'), api.get('/attention')]);
-      if (stamp !== request || owner !== api.draftOwner?.()) return;
-      const messageQueueChanges = [...queueChanges];
-      queueChanges.clear();
-      set({ snapshot, snapshotOwner: owner, attention, messageQueueChanges, unauthorized: false, loadError: '' });
-    } catch (error) {
-      if (stamp !== request || owner !== api.draftOwner?.()) return;
-      if (error.status === 401) set({ unauthorized: true, loadError: error.message });
-      else set({ loadError: error.message });
+  function refresh() {
+    if (inFlight) {
+      queued = true;
+      return inFlight;
     }
+    const stamp = epoch;
+    const owner = api.draftOwner?.();
+    const run = (async () => {
+      try {
+        const [snapshot, attention] = await Promise.all([api.get('/state'), api.get('/attention')]);
+        if (stamp !== epoch || owner !== api.draftOwner?.()) return;
+        const messageQueueChanges = [...queueChanges];
+        queueChanges.clear();
+        set({ snapshot, snapshotOwner: owner, attention, messageQueueChanges, unauthorized: false, loadError: '' });
+      } catch (error) {
+        if (stamp !== epoch || owner !== api.draftOwner?.()) return;
+        if (error.status === 401) set({ unauthorized: true, loadError: error.message });
+        else set({ loadError: error.message });
+      } finally {
+        if (inFlight === run) {
+          inFlight = null;
+          if (queued && stamp === epoch) {
+            queued = false;
+            scheduleRefresh();
+          }
+        }
+      }
+    })();
+    inFlight = run;
+    return run;
   }
 
   function scheduleRefresh() {
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(refresh, 120);
+    refreshTimer = setTimeout(() => { void refresh(); }, 160);
   }
 
   function connect() {
@@ -47,12 +65,19 @@ export function createStore(api) {
     const owner = api.draftOwner?.();
     const ws = new WebSocket(url);
     socket = ws;
-    ws.onopen = () => { if (current === generation) { set({ connection: 'online' }); refresh(); } };
+    ws.onopen = () => {
+      if (current !== generation) return;
+      set({ connection: 'online' });
+      if (!inFlight) void refresh();
+    };
     ws.onmessage = ({ data }) => {
       if (current !== generation || owner !== api.draftOwner?.()) return;
       // Plugin views refresh their private data independently of the workspace snapshot.
       let event;
       try { event = JSON.parse(data); } catch { /* Refresh state after an unrecognized frame. */ }
+      if (event?.type === 'connected' || event?.type === 'agent.trace.changed' || event?.type === 'takeover.changed') {
+        return;
+      }
       if (event?.type === 'web-conversations.changed' && typeof event.data?.id === 'string') {
         set({webConversationChange:{id:event.data.id,projectId:event.data.projectId,deleted:event.data.deleted===true}});
         return;
@@ -141,7 +166,15 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; queueChanges.clear(); set({ messageQueueChanges:[], snapshot: null, snapshotOwner: null, attention: [], savedPromptsChange: null, webConversationChange: null, workspaceBoardRevision: null, workspaceBoardFlowChange: null, savedSearchesRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, revokedAttachment: null, feishuBotChange: null, unauthorized: false, loadError: '' }); connect(); },
+    reset() {
+      epoch += 1;
+      inFlight = null;
+      queued = false;
+      clearTimeout(refreshTimer);
+      queueChanges.clear();
+      set({ messageQueueChanges:[], snapshot: null, snapshotOwner: null, attention: [], savedPromptsChange: null, webConversationChange: null, workspaceBoardRevision: null, workspaceBoardFlowChange: null, savedSearchesRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, revokedAttachment: null, feishuBotChange: null, unauthorized: false, loadError: '' });
+      connect();
+    },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }
