@@ -312,7 +312,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
                 if (!cwdCandidate && Array.isArray(row.tool_calls)) {
                   for (const tc of row.tool_calls) {
                     const argsStr = JSON.stringify(tc);
-                    const m = argsStr.match(/"(\/(?:data00\/)?(?:home|Users|workspace|opt|srv|var)\/[^"\\]{2,200})"/);
+                    const m = argsStr.match(/(\/(?:data00\/)?(?:home|Users|workspace|opt|srv|var)\/[^"\\\s]{2,200})/);
                     if (m) {
                       let candidate = m[1]!;
                       try {
