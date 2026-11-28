@@ -73,28 +73,28 @@ function backend(t:test.TestContext) {
   const cleanups: Array<()=>Promise<unknown>>=[];t.after(async()=>{for(const clean of cleanups.reverse())await clean();await bg.close();await effects.close();store.close();});return {store,bg,cleanups};
 }
 function bot(id:string,scope:FeishuBot['scope']):FeishuBot {return {id,name:id,appId:'app-'+id,scope,enabled:true,configured:true,connected:true,paired:true,replyTarget:'owner-'+id,requireConfirmation:true,createdAt:'',updatedAt:''};}
-for (const level of ['task','project','global','unpaired'] as const) test(`离场路由：${level} 优先级、积压恢复、替身投递去重、授权不变`,async t=>{
+for (const level of ['global','project','task','unpaired'] as const) test(`通知路由：${level} 优先级、积压恢复、替身投递去重、授权不变`,async t=>{
   const {store,bg,cleanups}=backend(t);const presence=createWebPresence();
-  const all=[bot('task',{kind:'task',todoId:'todo'}),bot('project',{kind:'project',projectId:'p'}),bot('global',{kind:'global'})];
-  let bots=level==='unpaired'?[]:all.slice(['task','project','global'].indexOf(level));
+  const all=[bot('global',{kind:'global'}),bot('project',{kind:'project',projectId:'p'}),bot('task',{kind:'task',todoId:'todo'})];
+  let bots=level==='unpaired'?[]:all.slice(['global','project','task'].indexOf(level));
   let sends=0;
   const channel=(b:FeishuBot)=>{const ch=`feishu.bot:${b.id}:0123456789abcdef`;bg.outbox.registerChannel(ch,async()=>{sends++;},()=>b.replyTarget);return ch;};
   const service=createAwayNotifications({store,background:bg,presence,bots:()=>bots,channel});cleanups.push(()=>service.close());
   store.put('runs','r',{id:'r',projectId:'p',todoId:'todo'});
   const publish=()=>bg.publish({type:'run.finished',typeVersion:1,sourceId:'r-finished',data:{runId:'r'}});
   publish();publish();await bg.eventbox.drain();assert.equal(service.list().length,1);
-  if(level==='unpaired'){assert.match(service.list()[0].reason!,/积压/);assert.equal(bg.outbox.list().length,0);bots=[all[2]];service.flush();}
+  if(level==='unpaired'){assert.match(service.list()[0].reason!,/积压/);assert.equal(bg.outbox.list().length,0);bots=[all[0]];service.flush();}
   const out=bg.outbox.list()[0];assert.match(out.channel,new RegExp(`:${level==='unpaired'?'global':level}:`));
   assert.equal(sends,0);assert.deepEqual(bg.outbox.grants(),[]);
   // An isolated test-only authorization reaches a fake sender, never a real channel.
   bg.outbox.grant('away-notifications',out.channel,true);await bg.outbox.tick();await bg.outbox.tick();assert.equal(sends,1);
   publish();await bg.eventbox.drain();service.flush();await bg.outbox.tick();assert.equal(sends,1);
 });
-test('离场：在场不通知、未标记机器人不兜底、已答问题不再积压',async t=>{
+test('通知：在场也通知、未标记机器人不兜底、已答问题不再积压',async t=>{
   const {store,bg,cleanups}=backend(t),presence=createWebPresence();let bots=[bot('unmarked',{kind:'unmarked'})];
   const service=createAwayNotifications({store,background:bg,presence,bots:()=>bots,channel:()=>{throw new Error('不能路由到未标记机器人');}});cleanups.push(()=>service.close());
   presence.heartbeat({tabId:'visible-tab',visible:true,focused:true});
-  bg.publish({type:'run.finished',typeVersion:1,sourceId:'present',data:{}});await bg.eventbox.drain();assert.equal(service.list()[0].status,'skipped');
+  bg.publish({type:'run.finished',typeVersion:1,sourceId:'present',data:{}});await bg.eventbox.drain();assert.equal(service.list()[0].status,'pending');
   presence.heartbeat({tabId:'visible-tab',visible:false,focused:false});store.put('interactions','c',{id:'c',status:'open'});
   bg.publish({type:'interaction.user_required',typeVersion:1,sourceId:'away',data:{id:'c'}});await bg.eventbox.drain();assert.equal(service.list().find(n=>n.cardId==='c')!.status,'pending');
   store.put('interactions','c',{id:'c',status:'answered'});service.flush();assert.equal(service.list().find(n=>n.cardId==='c')!.status,'skipped');assert.equal(bg.outbox.list().length,0);
@@ -220,22 +220,23 @@ test('主对话结果与审批/计划：离场积压、重复事件、已处理�
   } finally {await server.close();await rm(dir,{recursive:true,force:true});}
 });
 
-test('返回 Web 或关闭离场通知会取消未发送积压，保留 unknown',async t=>{
+test('关闭通知会取消未发送积压，保留 unknown，在场不取消通知',async t=>{
   const {store,bg,cleanups}=backend(t),presence=createWebPresence();const b=bot('global',{kind:'global'});
   const service=createAwayNotifications({store,background:bg,presence,bots:()=>[b],channel:()=> 'feishu.bot:global:0123456789abcdef'});cleanups.push(()=>service.close());
   bg.publish({type:'run.finished',typeVersion:1,sourceId:'return-web',data:{}});await bg.eventbox.drain();const first=bg.outbox.list()[0];assert.ok(first);
-  presence.heartbeat({tabId:'returned-web',visible:true,focused:true});service.flush();assert.equal(bg.outbox.list()[0].status,'cancelled');
-  presence.heartbeat({tabId:'returned-web',visible:false,focused:false});bg.publish({type:'run.finished',typeVersion:1,sourceId:'disable-web',data:{}});await bg.eventbox.drain();
+  presence.heartbeat({tabId:'returned-web',visible:true,focused:true});service.flush();assert.notEqual(bg.outbox.list()[0].status,'cancelled');
+  store.put('notifications.settings','away',{enabled:false});service.flush();assert.equal(bg.outbox.list()[0].status,'cancelled');
+  store.put('notifications.settings','away',{enabled:true});bg.publish({type:'run.finished',typeVersion:1,sourceId:'disable-web',data:{}});await bg.eventbox.drain();
   const second=bg.outbox.list().find(o=>o.id!==first.id)!;bg.outbox.grant('away-notifications',second.channel,true);
   bg.outbox.registerChannel(second.channel,async()=>{throw new Error('unknown');},()=>b.replyTarget);await bg.outbox.tick();assert.equal(bg.outbox.list().find(o=>o.id===second.id)!.status,'unknown');
   store.put('notifications.settings','away',{enabled:false});service.flush();assert.equal(bg.outbox.list().find(o=>o.id===second.id)!.status,'unknown');
 });
 
-test('返回 Web 时始终通知执行结果只保留执行通知',async t=>{
+test('在场时对话完成与执行结束均保留通知',async t=>{
   const {store,bg,cleanups}=backend(t),presence=createWebPresence(),b=bot('global',{kind:'global'});
   const service=createAwayNotifications({store,background:bg,presence,bots:()=>[b],channel:()=> 'feishu.bot:global:0123456789abcdef'});
   cleanups.push(()=>service.close());
-  store.put('notifications.settings','away',{enabled:true,alwaysNotifyRuns:true});
+  store.put('notifications.settings','away',{enabled:true});
   bg.publish({type:'run.finished',typeVersion:1,sourceId:'finished',data:{}});
   bg.publish({type:'web.notice',typeVersion:1,sourceId:'reply',data:{}});
   await bg.eventbox.drain();
@@ -243,8 +244,7 @@ test('返回 Web 时始终通知执行结果只保留执行通知',async t=>{
   presence.heartbeat({tabId:'returned-web',visible:true,focused:true});
   service.flush();
   for(const item of service.list()){
-    const event=store.get<{type:string}>('eventbox.events',item.id.slice(5));
-    assert.equal(item.status,event?.type==='run.finished'?'queued':'skipped');
-    assert.equal(bg.outbox.list().find(o=>o.id===item.outboxId)?.status==='cancelled',event?.type!=='run.finished');
+    assert.equal(item.status,'queued');
+    assert.notEqual(bg.outbox.list().find(o=>o.id===item.outboxId)?.status,'cancelled');
   }
 });

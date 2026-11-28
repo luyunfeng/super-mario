@@ -19,21 +19,15 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     for (const bot of bots().filter(b => b.scope.kind !== 'unmarked' && b.enabled && b.configured && b.connected && b.paired && b.replyTarget)) channel(bot);
     const settings = store.get<{enabled?:boolean; alwaysNotifyRuns?:boolean}>('notifications.settings','away');
     const disabled = settings?.enabled === false;
-    const alwaysNotifyRuns = settings?.alwaysNotifyRuns === true;
-    if (disabled || presence.status().present) {
+    if (disabled) {
       for (const item of list().filter(i => ['pending','queued'].includes(i.status))) {
-        if (!disabled && alwaysNotifyRuns) {
-          // Older notices have no runId, but retain their durable event identity.
-          const isRun = item.runId || store.get<{type:string}>('eventbox.events',item.id.slice('away:'.length))?.type === 'run.finished';
-          if (isRun) continue;
-        }
         const outgoing = item.outboxId ? background.outbox.list().find(o=>o.id===item.outboxId) : undefined;
-        // A return to Web may suppress unsent notifications, never rewrite uncertain delivery.
+        // Never rewrite uncertain delivery.
         if (outgoing && ['sending','sent','unknown'].includes(outgoing.status)) continue;
         if (outgoing && outgoing.status !== 'cancelled') background.outbox.cancel(outgoing.id,outgoing.version);
-        store.put('notifications.away',item.id,{...item,status:'skipped',reason:disabled?'离场通知已关闭':'用户已返回页面，取消未发送通知'});
+        store.put('notifications.away',item.id,{...item,status:'skipped',reason:'通知已关闭'});
       }
-      if (disabled || !alwaysNotifyRuns) return;
+      return;
     }
     for (const item of list().filter(i => i.status === 'pending')) {
       if (item.decision && store.get<{status:string}>(item.decision.kind === 'approval' ? 'approvals':'plans',item.decision.id)?.status !== 'pending') {
@@ -47,10 +41,11 @@ export function createAwayNotifications({ store, background, presence, bots, cha
       }
       const candidates = bots().filter(b => b.enabled && b.configured && b.connected && b.paired && b.replyTarget);
       const match = candidates.sort((a,b) => a.id.localeCompare(b.id));
-      const bot = match.find(b => b.scope.kind === 'task' && b.scope.todoId === item.todoId)
+      // Prefer global Feishu bot first, then project-scoped bot, then task-scoped bot.
+      const bot = match.find(b => b.scope.kind === 'global')
         ?? match.find(b => b.scope.kind === 'project' && b.scope.projectId === item.projectId)
-        ?? match.find(b => b.scope.kind === 'global');
-      if (!bot) { store.put('notifications.away', item.id, { ...item, reason: '积压：没有已连接并配对的事项、项目或全局机器人' }); continue; }
+        ?? match.find(b => b.scope.kind === 'task' && b.scope.todoId === item.todoId);
+      if (!bot) { store.put('notifications.away', item.id, { ...item, reason: '积压：没有已连接并配对的全局、项目或事项机器人' }); continue; }
       store.transaction(() => {
         const card = item.cardId ? store.get<{version:number}>('interactions',item.cardId) : undefined;
         const outgoing = background.outbox.enqueue('away-notifications', { dedupKey: item.id, channel: channel(bot), target: 'owner', content: { text: item.text }, ...(item.todoId ? {relatedTo:{kind:'todo',id:item.todoId}} : {}),...(card?.version ? {staleIf:{ref:`interaction:${item.cardId}`,version:card.version}} : item.decision ? {staleIf:{ref:`${item.decision.kind}:${item.decision.id}`,version:item.decision.version}} : {}) });
@@ -73,11 +68,10 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const projectId = originRun?.projectId ?? card?.projectId ?? todo?.projectId ?? planOrigin?.projectId ?? message?.projectId ?? (typeof approval?.params.projectId === 'string' ? approval.params.projectId : undefined);
     const plan = data.decisionKind === 'plan' ? store.get<{title:string}>('plans',data.decisionId!) : undefined;
     const originalRoute = message?.replyTo ? store.get<{channel:string}>('message.routes',message.replyTo) : undefined;
-    const atSource = store.get<{present:boolean}>('notifications.source-presence',data.runId ? `run:${data.runId}` : `interaction:${data.id}`)?.present;
     const awaySettings = store.get<{enabled?:boolean; alwaysNotifyRuns?:boolean}>('notifications.settings','away');
     const isRunFinish = event.type === 'run.finished';
-    const present = data.webPresent ?? atSource ?? presence.status().present;
-    const skip = (present && !(isRunFinish && awaySettings?.alwaysNotifyRuns === true)) || awaySettings?.enabled === false || Boolean(originalRoute?.channel);
+    // Notify regardless of Web presence; only skip if explicitly disabled or already replied via original channel.
+    const skip = awaySettings?.enabled === false || Boolean(originalRoute?.channel);
     const held = !skip && readBriefingSettings(store).lowDistraction &&
       (isRunFinish || (message && message.conversationId !== 'main' && !data.decisionKind && !data.id));
     const project = projectId ? store.get<Project>('projects', projectId) : undefined;
@@ -123,7 +117,7 @@ export function createAwayNotifications({ store, background, presence, bots, cha
         () => true, { ...pushOptions, openDevices: device => presence.devicePresent(device) })
         .then(() => {}, error => console.error('浏览器推送失败', error instanceof Error ? error.message : String(error)));
     }
-    store.put('notifications.away',id,{ id,createdAt:event.createdAt,...(isRunFinish && run && {runId:run.id}),...(message && {messageId:message.id}),text:fallbackText,projectId,todoId,cardId:data.id,...(data.decisionKind?{decision:{kind:data.decisionKind,id:data.decisionId!,version:data.version!}}:{}),status:skip?'skipped':held?'held':'pending',...(held?{reason:'按低干扰设置保留'}:{}),...(skip?{reason:Boolean(originalRoute?.channel)?'沿用原路回复，避免重复通知':'用户在场或已关闭离场通知'}:{}) });
+    store.put('notifications.away',id,{ id,createdAt:event.createdAt,...(isRunFinish && run && {runId:run.id}),...(message && {messageId:message.id}),text:fallbackText,projectId,todoId,cardId:data.id,...(data.decisionKind?{decision:{kind:data.decisionKind,id:data.decisionId!,version:data.version!}}:{}),status:skip?'skipped':held?'held':'pending',...(held?{reason:'按低干扰设置保留'}:{}),...(skip?{reason:Boolean(originalRoute?.channel)?'沿用原路回复，避免重复通知':'已关闭飞书通知'}:{}) });
     flush(); return {status:'done'};
   } });
   // Normalize user-visible replies and decisions into the existing durable eventbox.
