@@ -3674,11 +3674,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       }
     } catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery ?? 'unknown' }); }
     if (messageIds.length) {
-      app.store.put('feishu.bot.sent-ids', entry.id, { messageIds, at: Date.now() });
+      app.store.put('feishu.bot.sent-ids', entry.id, { id: entry.id, messageIds, at: Date.now() });
       // Only the outbox channel that asked reads this, moments later. A day old is of no use to anyone.
       const remove = app.store.remove?.bind(app.store);
-      if (remove) app.store.transaction(() => {
-        for (const row of app.store.list<{ id: string; at?: number }>('feishu.bot.sent-ids')) if (!row.at || Date.now() - row.at > 24 * 3600 * 1000) remove('feishu.bot.sent-ids', row.id);
+      if (remove && app.store.entries) app.store.transaction(() => {
+        for (const { id, value } of app.store.entries!<{ at?: number }>('feishu.bot.sent-ids')) {
+          if (!value?.at || Date.now() - value.at > 24 * 3600 * 1000) remove('feishu.bot.sent-ids', id);
+        }
       });
     }
   }
