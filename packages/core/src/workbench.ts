@@ -1,4 +1,4 @@
-import { localDayFormatter, createGithubConnector, DEFAULT_IGNORED_BRANCHES, type GithubConnectorState } from '../../../plugins/index.ts';
+import { localDayFormatter, createGithubConnector, DEFAULT_IGNORED_BRANCHES, type GithubConnectorState, createLiveAgentBridge, executeLiveAgentSend, LIVE_AGENT_SEND_APPROVAL, LIVE_AGENT_ANSWER_APPROVAL } from '../../../plugins/index.ts';
 import { issueMessageFileTickets, readChatFile, uploadChatFile, sweepChatFiles } from './chat-files.ts';
 import { readChatImage } from './chat-images.ts';
 import type { ChatFileInput, ChatImageInput } from '../../protocol/src/index.ts';
@@ -1050,6 +1050,39 @@ export async function createWorkbench(config: AppConfig) {
   }
   plugins.register(usageSources.extension);
   plugins.register(tokenStatistics);
+  plugins.register(createLiveAgentBridge({
+    projects: () => projects.list(),
+    machines: () => machines,
+    takeoverList: () => autoTakeover.list(),
+    sessionCustomTitle: (machineId, executorId, nativeSessionId) =>
+      store.get<{ title: string }>('session.names', `${machineId}:${executorId}:${nativeSessionId}`)?.title,
+    proposeSend: input => approvals.propose({
+      kind: LIVE_AGENT_SEND_APPROVAL as Approval['kind'],
+      title: `向现场终端发指令 · ${input.machineName}`,
+      details: `${input.reason}\n目标目录：${input.cwd}（窗格 ${input.paneId}）`,
+      params: {
+        machineId: input.machineId,
+        paneId: input.paneId,
+        terminalId: input.terminalId,
+        cwd: input.cwd,
+        text: input.text,
+        submit: input.submit,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+      },
+    }) as unknown as Json,
+    proposeAnswerPrompt: input => approvals.propose({
+      kind: LIVE_AGENT_ANSWER_APPROVAL as Approval['kind'],
+      title: `响应终端弹窗：${input.optionLabel}`,
+      details: `${input.reason}\n终端：${input.prompt.paneTitle}（${input.prompt.cwd}）`,
+      params: {
+        key: input.prompt.key,
+        keys: input.keys,
+        text: input.optionLabel,
+        cwd: input.prompt.cwd,
+        ...(input.prompt.projectId ? { projectId: input.prompt.projectId } : {}),
+      },
+    }) as unknown as Json,
+  }));
   plugins.register(todoCalendar);
   plugins.register(conversationSearch(readWorkspaceCode, searchPrivateConversations, () => {
     const input=currentAgentInput();
@@ -1268,7 +1301,7 @@ export async function createWorkbench(config: AppConfig) {
     return { deleted: true };
   }
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor', purpose: 'supervisor', timeZone: modelRoutingTimezone,
-    allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
+    allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'live_agents_list', 'live_agent_read', 'live_agent_sessions'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
   const inboxClassifier = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available,timeZone:modelRoutingTimezone});
   const inboxAssistantWorkspace = join(config.dataDir, 'pi', 'workspace');
@@ -2263,6 +2296,8 @@ export async function createWorkbench(config: AppConfig) {
     if (approval.kind === scheduledWorkApprovalKind) return scheduledWork.approveCreation(approval);
     if (approval.kind === GITHUB_COMMENT_APPROVAL) return githubExecuteComment(approval);
     if (approval.kind === GITHUB_PULL_APPROVAL) return githubExecutePull(approval);
+    if (approval.kind === LIVE_AGENT_SEND_APPROVAL) return await executeLiveAgentSend(machines, approval.params);
+    if (approval.kind === LIVE_AGENT_ANSWER_APPROVAL) return await autoTakeover.answerPrompt(String(approval.params.key ?? ''), String(approval.params.keys ?? ''), 'user') as unknown as Json;
     // Before the general plugin acknowledgement below: a mail approval carries a message
     // that is to be sent, and is not answered by an acknowledgement alone.
     // Nobody stops an approved send from outside: the owner approved it, and it ends by its

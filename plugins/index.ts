@@ -1,6 +1,7 @@
 export {webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, eraseWebConversationRegistration} from './web-conversations.ts';
 export { localDayFormatter } from './local-day.ts';
 export { createGithubConnector, DEFAULT_IGNORED_BRANCHES, type GithubConnectorState } from './github-connector.ts';
+export { createLiveAgentBridge, executeLiveAgentSend, LIVE_AGENT_SEND_APPROVAL, LIVE_AGENT_ANSWER_APPROVAL } from './live-agent-bridge.ts';
 import { documentHeadings } from '../packages/protocol/src/index.ts';
 import { mailTools } from './mail-tools.ts';
 import { createMailConnector } from './mail-connector.ts';
