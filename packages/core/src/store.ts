@@ -13,6 +13,7 @@ export function createStore(dbPath: string): Store {
     PRIMARY KEY (collection, id)
   )`);
   db.exec("CREATE INDEX IF NOT EXISTS documents_numeric_cursor ON documents(collection, CAST(id AS INTEGER))");
+  db.exec("CREATE INDEX IF NOT EXISTS documents_message_conversation ON documents(json_extract(value, '$.conversationId')) WHERE collection = 'messages'");
   // Public live excerpts start at a durable boundary. SQLite may renumber implicit
   // rowids during VACUUM or reuse them after deletes, so keep explicit message positions.
   const hasPositions = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_positions'");
@@ -43,6 +44,7 @@ export function createStore(dbPath: string): Store {
   const get = db.prepare('SELECT value FROM documents WHERE collection = ? AND id = ?');
   // Stable insertion order keeps conversations chronological; editing a row does not move it.
   const list = db.prepare('SELECT value FROM documents WHERE collection = ? ORDER BY rowid');
+  const byConversation = db.prepare("SELECT value FROM documents WHERE collection = 'messages' AND json_extract(value, '$.conversationId') = ? ORDER BY rowid");
   const entries = db.prepare('SELECT id, value FROM documents WHERE collection = ? ORDER BY rowid');
   const put = db.prepare('INSERT INTO documents VALUES (?, ?, ?) ON CONFLICT(collection, id) DO UPDATE SET value = excluded.value');
   const remove = db.prepare('DELETE FROM documents WHERE collection = ? AND id = ?');
@@ -65,6 +67,9 @@ export function createStore(dbPath: string): Store {
       if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1)
         throw new RangeError('Invalid message cursor or page size');
       return messagePage.all(after, limit).map(row => ({position:Number(row.position), id:String(row.id), value:JSON.parse(String(row.value)) as T}));
+    },
+    messagesByConversation<T>(conversationId: string): T[] {
+      return byConversation.all(conversationId).map(row => JSON.parse(String(row.value)) as T);
     },
     listAfter<T>(collection: string, id: number, limit = 1000): T[] { return after.all(collection, id, limit).map(row => JSON.parse(row.value as string) as T); },
     get<T>(collection: string, id: string): T | undefined {

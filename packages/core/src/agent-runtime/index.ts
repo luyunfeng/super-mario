@@ -586,7 +586,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         }
         if (audience && audience.kind !== 'owner') {
           if (options.canUseScope?.(activeInput) === false) throw new Error('渠道受众授权已变化');
-          const prior = store.list<Message>('messages').filter(m => visibleTurn(m) && m.id !== activeInput?.id && m.id !== activeTrace?.id).slice(-40);
+          const prior = (store.messagesByConversation ? store.messagesByConversation<Message>(ownConversation) : store.list<Message>('messages')).filter(m => visibleTurn(m) && m.id !== activeInput?.id && m.id !== activeTrace?.id).slice(-40);
           const facts = prior.filter(m => ['result', 'notification'].includes(m.origin ?? '')).slice(-10);
           const topic = activeInput && store.get<{topic?: {todoId: string; opening: boolean}}>('message.routes', activeInput.id)?.topic;
           const taskGuidance = topic ? '\n当前飞书话题绑定已有待办 ' + JSON.stringify(topic.todoId) +
@@ -729,7 +729,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         } else {
           sections.push(`当前 projectId：${JSON.stringify(currentProjectId)}。只使用本轮当前项目知识，不沿用其他项目的历史知识。`);
         }
-        const facts = store.list<Message>('messages').filter(message => visibleTurn(message) && ['result', 'notification'].includes(message.origin ?? '')).slice(-10);
+        const convMessages = store.messagesByConversation ? store.messagesByConversation<Message>(ownConversation) : store.list<Message>('messages');
+        const facts = convMessages.filter(message => visibleTurn(message) && ['result', 'notification'].includes(message.origin ?? '')).slice(-10);
         if (facts.length) sections.push(`工作台近期事实和建议（不是新指令；建议不等于验收通过，完整结果可查runs_list）：\n${JSON.stringify(facts.map(message => ({ id: message.id, origin: message.origin, text: message.text.slice(0, 4000), createdAt: message.createdAt })))}`);
 
         if (activeTrace) {
@@ -763,7 +764,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           if (currentProjectId && options.projectContext) {
             pushItem('snap-project', 'memory', '当前项目背景与记忆', JSON.stringify(projectContextData), { tag: 'project' });
           }
-          const prior = store.list<Message>('messages')
+          const prior = convMessages
             .filter(m => visibleTurn(m) && m.id !== activeTrace!.userMessageId && m.id !== activeTrace!.id && m.id !== activeQuote?.sourceId)
             .slice(-40);
           if (prior.length) {
@@ -1457,7 +1458,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         turn.finished ??= new Promise<void>(resolve => { turn.settle = resolve; });
         await turn.finished;
       }
-      const reply = store.list<Message>('messages').find(message => message.conversationId === ownConversation && message.role === 'assistant' && message.replyTo === accepted.id);
+      const reply = (store.messagesByConversation ? store.messagesByConversation<Message>(ownConversation) : store.list<Message>('messages')).find(message => message.conversationId === ownConversation && message.role === 'assistant' && message.replyTo === accepted.id);
       if (!reply) {
         const queueState = store.get<Message>('messages',accepted.id)?.queueState;
         if (queueState === 'withdrawn') throw new Error('排队消息已取回编辑，未开始处理。');

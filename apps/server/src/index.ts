@@ -1741,7 +1741,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, receipt);
         }
         if (path === '/api/v1/messages/main' && method === 'GET') {
-          return json(res, 200, { messages: app.store.list<Message>('messages').filter(m => m.conversationId === 'main') });
+          const msgs = app.store.messagesByConversation
+            ? app.store.messagesByConversation<Message>('main')
+            : app.store.list<Message>('messages').filter(m => m.conversationId === 'main');
+          return json(res, 200, { messages: msgs });
         }
         if (path === '/api/v1/messages' && method === 'POST') {
           const input = await chatMessageBody(req);

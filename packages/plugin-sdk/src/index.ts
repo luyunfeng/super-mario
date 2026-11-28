@@ -17,6 +17,8 @@ export interface Store {
   /** Durable insertion positions for messages. Updating a message keeps its position. */
   lastMessagePosition?(): number;
   messagesAfterPosition?<T>(after: number, limit: number): Array<{ position: number; id: string; value: T }>;
+  /** Indexed lookup of messages in one conversation without scanning every conversation. */
+  messagesByConversation?<T>(conversationId: string): T[];
   entries?<T>(collection: string): Array<{ id: string; value: T }>;
   get<T>(collection: string, id: string): T | undefined;
   list<T>(collection: string): T[];
