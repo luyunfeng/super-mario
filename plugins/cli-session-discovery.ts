@@ -8,7 +8,7 @@ import type { AgentSessionDiscovery, NativeExecutorId, ObservedAgentSession } fr
 import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 import { createProjectDiscovery, parseSessionHeader } from './project-discovery.ts';
 
-const limits = { roots: 32, directories: 2048, entries: 16384, perDirectory: 2048, files: 4096, results: 2048, head: 16 * 1024, index: 1024 * 1024, warnings: 12 };
+const limits = { roots: 32, directories: 2048, entries: 16384, perDirectory: 2048, files: 4096, results: 2048, head: 128 * 1024, index: 1024 * 1024, warnings: 12 };
 type Options = { home?: string; codexHome?: string; claudeHome?: string; cwd?: string; roots?: string[]; temporaryRoots?: string[] };
 type Selection = { executorId: NativeExecutorId; nativeSessionId: string; cwd: string };
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
@@ -95,7 +95,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
       return text.length > 72 ? text.slice(0, 72) + '…' : text;
     }
     function extractRowTitle(row: Record<string, unknown>): string | undefined {
-      const direct = cleanTitle(row.customTitle ?? row.summary ?? row.firstPrompt ?? row.title);
+      const direct = cleanTitle(row.customTitle ?? row.aiTitle ?? row.agentName ?? row.summary ?? row.firstPrompt ?? row.title);
       if (direct) return direct;
       // Claude JSONL user message: { type: 'user', message: { role: 'user', content: string | [{type:'text',text}] } }
       const msg = object(row.message) ? row.message : undefined;
@@ -186,11 +186,14 @@ export function createCliSessionDiscovery(options: Options = {}) {
         return;
       }
       const lines = path.endsWith('.json') && !data.cut ? [data.text] : data.text.split('\n');
+      const inspectLines = path.endsWith('.json') && data.cut ? [data.text] : lines.slice(0, 80);
       let matched = false;
       let matchedKey = '';
       let detectedTitle: string | undefined;
-      for (const [i, line] of (path.endsWith('.json') && data.cut ? [data.text] : lines.slice(0, 12)).entries()) {
+      for (const [i, line] of inspectLines.entries()) {
         if (!line.trim()) continue;
+        // Skip the trailing partial line truncated by the bounded head buffer.
+        if (data.cut && !path.endsWith('.json') && i === lines.length - 1 && i > 0) continue;
         let row: unknown;
         try { row = JSON.parse(line); }
         catch {
@@ -221,7 +224,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
         }
       }
       if (!matched) {
-        if (data.cut || lines.length > 8) cut();
+        if (data.cut || lines.length > 80) cut();
         warn('部分会话头缺少有效身份或目录，已跳过');
       }
     }
@@ -242,7 +245,12 @@ export function createCliSessionDiscovery(options: Options = {}) {
           if (files >= limits.files) { cut(); break; }
           const child = join(path, entry.name);
           if (entry.isSymbolicLink()) continue;
-          if (entry.isDirectory()) { if (depth > 0) await walk(child, executorId, depth - 1); else cut(); }
+          if (entry.isDirectory()) {
+            // Claude Code stores tool dumps, memory files, and subagent traces in nested folders under project/session dirs.
+            if (executorId === 'claude-code' && ['tool-results', 'memory', 'subagents'].includes(entry.name)) continue;
+            if (depth > 0) await walk(child, executorId, depth - 1);
+            else cut();
+          }
           else if (entry.isFile() && /\.jsonl?$/.test(entry.name) && (!target || entry.name === 'sessions-index.json' || entry.name.includes(target.nativeSessionId))) await metadata(child, executorId, entry.name === 'sessions-index.json');
         }
       } catch (error) { if (!missing(error)) { cut(); warn('部分会话目录无法读取'); } }
