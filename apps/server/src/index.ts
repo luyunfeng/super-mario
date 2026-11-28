@@ -490,8 +490,15 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             ...(url.searchParams.has('projectId') ? { projectId: requiredText(url.searchParams.get('projectId'), '项目') } : {}),
             ...(url.searchParams.has('todoId') ? { todoId: requiredText(url.searchParams.get('todoId'), '事项') } : {}),
           });
+          const customNames: Record<string, string> = {};
+          if (app.store.entries) {
+            for (const { id, value } of app.store.entries<{ title?: string }>('session.names')) {
+              if (value?.title) customNames[id] = value.title;
+            }
+          }
           return json(res, 200, {
             ...discovered,
+            customNames,
             machines: (discovered.machines ?? []).map(m => ({ ...m, sessions: withSessionNames(m.machineId, m.sessions ?? []) })),
           });
         }
@@ -551,7 +558,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/agents/sessions/analyze' && method === 'POST') {
           const input = await body(req), machine = machines.list().find(row => row.id === input.machineId);
           if (!machine?.online) throw new InputError('执行机离线', 503);
-          if (!machine.capabilities.includes('agents.transcript')) throw new InputError('请升级执行机代理以读取完整会话', 409);
+          const needCap = input.mode === 'screen' ? 'terminal.live.read' : 'agents.transcript';
+          if (!machine.capabilities.includes(needCap)) throw new InputError('请升级执行机代理以读取会话', 409);
           return json(res, 202, sessionAnalysis.start(input));
         }
         const analysisJob = path.match(/^\/api\/v1\/agents\/sessions\/analysis\/([^/]+)$/);

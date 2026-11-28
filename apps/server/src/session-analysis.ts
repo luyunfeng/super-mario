@@ -4,7 +4,7 @@ import { analyzeSession } from '../../../packages/core/src/agent-runtime/session
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 
-type Source = { machineId: string; executorId: string; nativeSessionId: string; cwd: string; mode?: 'recent' | 'full' };
+type Source = { machineId: string; executorId: string; nativeSessionId: string; cwd: string; mode?: 'recent' | 'full' | 'screen'; paneId?: string; terminalId?: string };
 type Job = Source & { id: string; status: 'reading' | 'analysing' | 'done' | 'failed' | 'unknown'; detail: string; text: string; readBytes: number; totalBytes: number; records: number; createdAt: string };
 const object = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
 /** Select only public dialogue/actions; never send raw reasoning/system records to a model. */
@@ -53,6 +53,36 @@ export function createSessionAnalysis(options: {
     try {
       signal.throwIfAborted();
       const records: string[] = [];
+      if (job.mode === 'screen') {
+        const sumKey = `${job.machineId}:pane:${job.terminalId || job.nativeSessionId}`;
+        const prev = store.get<{ lastHash?: string; summary: string; updatedAt: string }>('session.summaries', sumKey);
+        job.detail = '正在只读读取当前终端最近画面…'; save(job);
+        const res = await call(job, 'terminal.live.read', {
+          paneId: job.paneId, terminalId: job.terminalId, cwd: job.cwd,
+        }, signal) as { text?: string };
+        const clean = String(res.text ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '').trim();
+        if (!clean) throw new Error('当前终端没有可读的画面输出');
+        const tail = clean.slice(-10_000);
+        const lastHash = `${tail.length}:${tail.slice(0, 120)}:${tail.slice(-120)}`;
+        if (prev?.summary && prev.lastHash === lastHash) {
+          job.text = `${prev.summary}\n\n（终端画面无新变化，已复用 ${prev.updatedAt} 的缓存结论。）`;
+          job.status = 'done'; job.detail = '画面无变化，已复用上次结论'; save(job);
+          return;
+        }
+        job.readBytes = Buffer.byteLength(tail, 'utf8');
+        job.totalBytes = job.readBytes;
+        signal.throwIfAborted(); job.status = 'analysing'; job.detail = '已读取终端最近画面，正在生成简明总结…'; save(job);
+        const promptInput = prev?.summary
+          ? `【上次结论】\n${prev.summary}\n\n【当前终端最近输出（${job.executorId}）】\n${tail}\n\n请结合上次结论与最新画面，用不超过 10 句大白话更新当前进展（在做什么、刚完成什么、有无卡点或报错、下一步是什么）。`
+          : `【当前终端最近输出（${job.executorId}）】\n${tail}\n\n请用不超过 10 句大白话说清当前进展（在做什么、刚完成什么、有无卡点或报错、下一步是什么）。`;
+        const text = await (options.analyze ?? analyzeSession)(promptInput, options.config, detail => { job.detail = detail; save(job); }, { signal });
+        signal.throwIfAborted();
+        const updatedAt = new Date().toISOString();
+        store.put('session.summaries', sumKey, { lastHash, summary: text, updatedAt });
+        job.text = `${text}\n\n（基于 ${job.executorId} 终端最近 300 行只读画面总结。）`;
+        job.status = 'done'; job.detail = '终端进展总结完成'; save(job);
+        return;
+      }
       if (job.mode === 'recent') {
         const sumKey = `${job.machineId}:${job.executorId}:${job.nativeSessionId}`;
         const prev = store.get<{ lastOffset: number; summary: string; updatedAt: string }>('session.summaries', sumKey);
@@ -129,19 +159,24 @@ export function createSessionAnalysis(options: {
     start(input: Record<string, unknown>) {
       if (closed) throw new Error('分析服务已关闭');
       if (!options.available()) throw new Error('主模型不可用，请先完成模型配置');
-      for (const key of ['machineId', 'executorId', 'nativeSessionId', 'cwd']) if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error(`缺少完整会话标识：${key}`);
-      if (!['codex', 'claude-code'].includes(String(input.executorId))) throw new Error('当前 Agent 尚不支持完整会话分析');
-      const mode = input.mode === 'recent' ? 'recent' : 'full';
+      const mode = input.mode === 'screen' ? 'screen' : input.mode === 'recent' ? 'recent' : 'full';
+      if (mode === 'screen') {
+        for (const key of ['machineId', 'paneId', 'terminalId', 'cwd']) if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error(`缺少终端标识：${key}`);
+      } else {
+        for (const key of ['machineId', 'executorId', 'nativeSessionId', 'cwd']) if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error(`缺少完整会话标识：${key}`);
+        if (!['codex', 'claude-code'].includes(String(input.executorId))) throw new Error('当前 Agent 尚不支持完整会话分析');
+      }
       const source: Source = {
         machineId: String(input.machineId),
-        executorId: String(input.executorId),
-        nativeSessionId: String(input.nativeSessionId),
+        executorId: String(input.executorId || 'terminal'),
+        nativeSessionId: String(input.nativeSessionId || input.terminalId || ''),
         cwd: String(input.cwd),
         mode,
+        ...(mode === 'screen' ? { paneId: String(input.paneId), terminalId: String(input.terminalId) } : {}),
       };
       const previous = store.list<Job>('session.analysis').find(job => active.has(job.id) && Object.entries(source).every(([key, value]) => job[key as keyof Source] === value));
       if (previous) return previous;
-      const job: Job = { ...source, id: randomUUID(), status: 'reading', detail: mode === 'recent' ? '正在读取最近对话片段…' : '正在定位完整原生会话', text: '', records: 0, readBytes: 0, totalBytes: 0, createdAt: new Date().toISOString() }; save(job);
+      const job: Job = { ...source, id: randomUUID(), status: 'reading', detail: mode === 'screen' ? '正在读取终端最近画面…' : mode === 'recent' ? '正在读取最近对话片段…' : '正在定位完整原生会话', text: '', records: 0, readBytes: 0, totalBytes: 0, createdAt: new Date().toISOString() }; save(job);
       const controller = new AbortController();
       const task = run(job, controller.signal).finally(() => active.delete(job.id)); active.set(job.id, { controller, task });
       return structuredClone(job);
