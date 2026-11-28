@@ -46,12 +46,15 @@ export function detectScreenPrompt(rawText: string): DetectedScreenPrompt | unde
   }
 
   const numbered: ScreenPromptOption[] = [];
-  for (const line of lines.slice(-10)) {
-    const m = line.match(/^\s*(?:[❯>›•]\s*)?([1-5])[.)]\s+(.{2,80})$/);
+  for (const line of lines.slice(-8)) {
+    const m = line.match(/^\s*(?:[❯>›•]\s*)?([1-4])[.)]\s+(.{2,80})$/);
     if (m) numbered.push({ label: `${m[1]}. ${m[2]!.trim()}`, keys: `${m[1]}\r` });
   }
-  const isPermission = /(?:allow|approve|permission|do you want to (?:run|proceed|execute|edit|create|make)|proceed\?|confirm)/i.test(tail);
-  if (isPermission && numbered.length >= 2) {
+  // Require a contiguous 1..N choice block starting at 1 so model pickers or scrolled lists (e.g. 4. 5. 6.) never false-positive.
+  const startsAtOne = numbered.length >= 2 && numbered[0]!.keys === '1\r' && numbered[1]!.keys === '2\r';
+  const promptWindow = lines.slice(-10).join('\n');
+  const isPermission = /(?:do you want to (?:run|proceed|execute|edit|create|make|allow)|allow (?:this|once|always)|permission to |proceed\?)/i.test(promptWindow);
+  if (isPermission && startsAtOne) {
     return {
       kind: 'permission',
       rev,
@@ -60,7 +63,7 @@ export function detectScreenPrompt(rawText: string): DetectedScreenPrompt | unde
       options: numbered.slice(0, 4),
     };
   }
-  if (isPermission && /(?:\[y\/n\]|\(y\/n\)|yes\/no)/i.test(tail)) {
+  if (isPermission && /(?:\[y\/n\]|\(y\/n\)|yes\/no)/i.test(lines.slice(-5).join('\n'))) {
     return {
       kind: 'permission',
       rev,

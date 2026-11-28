@@ -187,19 +187,8 @@ export function createAutoTakeover(options: {
             } catch { /* fall through to user card */ }
           }
 
-          // Otherwise open an interaction card so Web & Feishu notify the user.
-          try {
-            const optText = record.options.map((o, i) => `${i + 1}. ${o.label}`).join('\n');
-            const card = options.openCard({
-              kind: record.kind === 'permission' ? 'permission' : 'question',
-              title: `${record.title} · ${record.paneTitle}`,
-              body: `机器：${record.machineName} · 目录：${record.cwd}\n\n${record.excerpt}\n\n可选操作：\n${optText}`,
-              ...(project ? { projectId: project.id } : {}),
-              executorId: `${m.id}/${record.agent}`,
-              cwd: record.cwd,
-            });
-            store.put(recordsCollection, key, { ...record, cardId: card.id });
-          } catch { /* keep record open in takeover list */ }
+          // Keep detected prompts in the takeover list (/terminals.html sidebar and pi live_agents_list)
+          // without flooding the main approval/away-notification queue on every scan.
           events.publish('takeover.changed', { key, status: 'open' });
         }
       }
