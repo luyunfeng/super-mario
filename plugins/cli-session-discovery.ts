@@ -88,7 +88,42 @@ export function createCliSessionDiscovery(options: Options = {}) {
       } catch (error) { if (!missing(error)) { cut(); warn('部分会话元数据无法读取'); } }
       finally { await file?.close(); }
     }
-    async function add(executorId: NativeExecutorId, meta: Record<string, unknown>, observedAt: string, index = false, outerTime?: unknown, fileModifiedAt?: string, archived = false) {
+    function cleanTitle(raw: unknown): string | undefined {
+      if (typeof raw !== 'string') return undefined;
+      const text = raw.replace(/<[^>]{1,80}>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!text || text.length < 2) return undefined;
+      return text.length > 72 ? text.slice(0, 72) + '…' : text;
+    }
+    function extractRowTitle(row: Record<string, unknown>): string | undefined {
+      const direct = cleanTitle(row.customTitle ?? row.summary ?? row.firstPrompt ?? row.title);
+      if (direct) return direct;
+      // Claude JSONL user message: { type: 'user', message: { role: 'user', content: string | [{type:'text',text}] } }
+      const msg = object(row.message) ? row.message : undefined;
+      if (row.type === 'user' || msg?.role === 'user') {
+        const content = msg?.content ?? row.content;
+        if (typeof content === 'string') return cleanTitle(content);
+        if (Array.isArray(content)) {
+          for (const part of content) {
+            if (object(part) && part.type === 'text') {
+              const t = cleanTitle(part.text);
+              if (t) return t;
+            }
+          }
+        }
+      }
+      // Codex JSONL user message: { type: 'response_item', payload: { role: 'user', content: [{ text }] } }
+      const payload = object(row.payload) ? row.payload : undefined;
+      if (payload?.role === 'user' && Array.isArray(payload.content)) {
+        for (const part of payload.content) {
+          if (object(part)) {
+            const t = cleanTitle(part.text);
+            if (t) return t;
+          }
+        }
+      }
+      return undefined;
+    }
+    async function add(executorId: NativeExecutorId, meta: Record<string, unknown>, observedAt: string, index = false, outerTime?: unknown, fileModifiedAt?: string, archived = false, title?: string) {
       const id = executorId === 'codex' ? meta.id : meta.sessionId ?? meta.session_id;
       if (!validId(id)) { warn('部分会话元数据缺少有效原生 ID，已跳过'); return false; }
       if (target && (executorId !== target.executorId || id !== target.nativeSessionId)) return true;
@@ -117,16 +152,19 @@ export function createCliSessionDiscovery(options: Options = {}) {
       const subagent = object(source?.subagent) ? source.subagent : undefined;
       const spawned = object(subagent?.thread_spawn) ? subagent.thread_spawn : undefined;
       const parent = meta.parent_thread_id ?? spawned?.parent_thread_id ?? meta.parent_session_id ?? meta.parentSessionId ?? meta.forked_from_id;
+      const resolvedTitle = title ?? cleanTitle(meta.customTitle ?? meta.summary ?? meta.firstPrompt);
       if (previous) {
         previous.observedAt = observedAt;
         if (!archived) delete previous.archived;
         if (fileModifiedAt && (!previous.fileModifiedAt || fileModifiedAt > previous.fileModifiedAt)) previous.fileModifiedAt = fileModifiedAt;
         if (metadataTimestamp && (!previous.metadataTimestamp || metadataTimestamp > previous.metadataTimestamp)) previous.metadataTimestamp = metadataTimestamp;
         if (validId(parent) && !previous.parentNativeSessionId) previous.parentNativeSessionId = parent;
+        if (resolvedTitle && !previous.title) previous.title = resolvedTitle;
         return true;
       }
       if (found.size >= limits.results) { cut(); return true; }
       found.set(key, { ...(archived ? { archived: true as const } : {}), id: key, executorId, nativeSessionId: id, cwd, observedAt,
+        ...(resolvedTitle ? { title: resolvedTitle } : {}),
         ...(metadataTimestamp ? { metadataTimestamp } : {}), ...(fileModifiedAt ? { fileModifiedAt } : {}), ...(validId(parent) ? { parentNativeSessionId: parent } : {}),
         source: 'session-metadata', state: 'historical', writable: false });
       return true;
@@ -149,7 +187,9 @@ export function createCliSessionDiscovery(options: Options = {}) {
       }
       const lines = path.endsWith('.json') && !data.cut ? [data.text] : data.text.split('\n');
       let matched = false;
-      for (const [i, line] of (path.endsWith('.json') && data.cut ? [data.text] : lines.slice(0, 8)).entries()) {
+      let matchedKey = '';
+      let detectedTitle: string | undefined;
+      for (const [i, line] of (path.endsWith('.json') && data.cut ? [data.text] : lines.slice(0, 12)).entries()) {
         if (!line.trim()) continue;
         let row: unknown;
         try { row = JSON.parse(line); }
@@ -160,12 +200,23 @@ export function createCliSessionDiscovery(options: Options = {}) {
           else { warn('部分会话头 JSON 无效，已跳过'); continue; }
         }
         if (!object(row)) continue;
-        const meta = executorId === 'codex' ? row.type === 'session_meta' && object(row.payload) ? row.payload : undefined : row;
-        if (meta) matched = await add(executorId, meta, data.observedAt, false, row.timestamp, data.fileModifiedAt, executorId === 'codex' && dirname(path) === archiveDirectory) || matched;
-        if (matched) {
-          if (target && path.endsWith('.jsonl') && meta && (meta.id === target.nativeSessionId && executorId === 'codex' || executorId === 'claude-code' && (meta.sessionId ?? meta.session_id) === target.nativeSessionId)) {
-            logs.set(path, { path, dev: data.dev, ino: data.ino });
+        if (!detectedTitle) detectedTitle = extractRowTitle(row);
+        if (!matched) {
+          const meta = executorId === 'codex' ? row.type === 'session_meta' && object(row.payload) ? row.payload : undefined : row;
+          if (meta) {
+            matched = await add(executorId, meta, data.observedAt, false, row.timestamp, data.fileModifiedAt, executorId === 'codex' && dirname(path) === archiveDirectory, detectedTitle) || matched;
+            if (matched) {
+              const id = executorId === 'codex' ? meta.id : meta.sessionId ?? meta.session_id;
+              if (validId(id)) matchedKey = `${executorId}:${id}`;
+              if (target && path.endsWith('.jsonl') && (meta.id === target.nativeSessionId && executorId === 'codex' || executorId === 'claude-code' && (meta.sessionId ?? meta.session_id) === target.nativeSessionId)) {
+                logs.set(path, { path, dev: data.dev, ino: data.ino });
+              }
+            }
           }
+        }
+        if (matched && detectedTitle) {
+          const existing = matchedKey ? found.get(matchedKey) : undefined;
+          if (existing && !existing.title) existing.title = detectedTitle;
           break;
         }
       }

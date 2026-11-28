@@ -478,11 +478,23 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           catch (error) { throw new InputError(error instanceof Error ? error.message : '督办配置无效'); }
         }
         if (path === '/api/v1/supervisor/flush' && method === 'POST') { app.supervision.tick(); return json(res, 200, await app.supervisorAgent.flush() ?? { pending: true }); }
-        if (path === '/api/v1/agents/sessions' && method === 'GET') return json(res, 200, await app.agentSessions.discover({
-          ...(url.searchParams.has('machineId') ? { machineId: requiredText(url.searchParams.get('machineId'), '电脑') } : {}),
-          ...(url.searchParams.has('projectId') ? { projectId: requiredText(url.searchParams.get('projectId'), '项目') } : {}),
-          ...(url.searchParams.has('todoId') ? { todoId: requiredText(url.searchParams.get('todoId'), '事项') } : {}),
-        }));
+        const sessionNameKey = (machineId: string, executorId: string, nativeSessionId: string) => `${machineId}:${executorId}:${nativeSessionId}`;
+        const withSessionNames = <T extends { executorId: string; nativeSessionId: string; title?: string; customTitle?: string }>(machineId: string, sessions: T[]): T[] =>
+          sessions.map(s => {
+            const saved = app.store.get<{ title: string }>('session.names', sessionNameKey(machineId, s.executorId, s.nativeSessionId));
+            return saved?.title ? { ...s, customTitle: saved.title, title: saved.title } : s;
+          });
+        if (path === '/api/v1/agents/sessions' && method === 'GET') {
+          const discovered = await app.agentSessions.discover({
+            ...(url.searchParams.has('machineId') ? { machineId: requiredText(url.searchParams.get('machineId'), '电脑') } : {}),
+            ...(url.searchParams.has('projectId') ? { projectId: requiredText(url.searchParams.get('projectId'), '项目') } : {}),
+            ...(url.searchParams.has('todoId') ? { todoId: requiredText(url.searchParams.get('todoId'), '事项') } : {}),
+          });
+          return json(res, 200, {
+            ...discovered,
+            machines: (discovered.machines ?? []).map(m => ({ ...m, sessions: withSessionNames(m.machineId, m.sessions ?? []) })),
+          });
+        }
         // How full the disks of one computer are. One read of each mount on that computer;
         // nothing is written there and nothing of the files is read.
         if (path === '/api/v1/machines/storage' && method === 'GET') {
@@ -521,7 +533,20 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const machine = machines.list().find(row => row.id === url.searchParams.get('machineId'));
           if (!machine?.online) throw new InputError('执行机离线', 503);
           const cwd = requiredText(url.searchParams.get('cwd'), '会话目录');
-          return json(res, 200, await machines.call(machine.id, 'agents.sessions', { roots: [cwd] }));
+          const resData = await machines.call(machine.id, 'agents.sessions', { roots: [cwd] }) as { sessions?: Array<{ executorId: string; nativeSessionId: string; title?: string; customTitle?: string }> };
+          return json(res, 200, { ...resData, sessions: withSessionNames(machine.id, resData.sessions ?? []) });
+        }
+        if (path === '/api/v1/agents/sessions/rename' && method === 'PUT') {
+          const input = await body(req);
+          const machineId = requiredText(input.machineId, '电脑');
+          const executorId = requiredText(input.executorId, '执行者');
+          const nativeSessionId = requiredText(input.nativeSessionId, '会话 ID');
+          const title = typeof input.title === 'string' ? input.title.trim().replace(/\s+/g, ' ') : '';
+          if (title.length > 120) throw new InputError('会话名称不能超过 120 字');
+          const key = sessionNameKey(machineId, executorId, nativeSessionId);
+          if (title) app.store.put('session.names', key, { title, updatedAt: new Date().toISOString() });
+          else app.store.remove('session.names', key);
+          return json(res, 200, { ok: true, key, title });
         }
         if (path === '/api/v1/agents/sessions/analyze' && method === 'POST') {
           const input = await body(req), machine = machines.list().find(row => row.id === input.machineId);

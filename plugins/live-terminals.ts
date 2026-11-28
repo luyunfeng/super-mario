@@ -2,8 +2,9 @@ import { focusTerminalPane } from './terminal-focus.ts';
 import { terminalCommand, terminalSocketPath, validTerminalSessionName } from './terminal-endpoint.ts';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { readdir, readlink, realpath } from 'node:fs/promises';
-import { basename, isAbsolute, normalize, relative } from 'node:path';
+import { readdir, readFile, readlink, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { basename, isAbsolute, join, normalize, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
@@ -234,6 +235,15 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
           }
         }
         const pid = typeof p.pid === 'number' && Number.isSafeInteger(p.pid) ? p.pid : undefined;
+        if (pid && (agent === 'claude' || agent === 'claude-code')) {
+          try {
+            const claudeDir = endpoint.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+            const sessionFile = JSON.parse(await readFile(join(claudeDir, 'sessions', `${pid}.json`), 'utf8')) as Record<string, unknown>;
+            if (typeof sessionFile.sessionId === 'string' && sessionFile.sessionId.trim()) {
+              return sessionFile.sessionId.trim();
+            }
+          } catch { /* no pid session file */ }
+        }
         if (pid && process.platform === 'linux') {
           try {
             const fds = await readdir(`/proc/${pid}/fd`);

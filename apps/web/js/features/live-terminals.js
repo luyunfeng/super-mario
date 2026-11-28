@@ -6,6 +6,14 @@ import { openDrawer } from '../ui/overlay.js';
 
 const STATES = { working: '正在工作', blocked: '等待你输入', idle: '等待输入', done: '终端已停下', unknown: '状态待确认' };
 const encode = text => btoa(Array.from(new TextEncoder().encode(text), value => String.fromCharCode(value)).join(''));
+function shortTime(iso) {
+  if (!iso) return '时间未知';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function shortId(id) { return id ? String(id).slice(0, 8) : ''; }
 
 /** External live panes are observed in place. No Run, resume, or completion is invented. */
 export function createLiveTerminals({ api, store, router }) {
@@ -66,28 +74,64 @@ export function createLiveTerminals({ api, store, router }) {
       .then(poll)
       .catch(cause => { if (!closed) replace(box, Banner({ tone: 'danger', children: cause.message })); });
   }
+  async function renameSession(session, onDone) {
+    const current = session.customTitle || session.title || '';
+    const next = window.prompt('输入会话名称（留空恢复默认标题）：', current);
+    if (next === null) return;
+    const trimmed = next.trim();
+    try {
+      await api.put('/agents/sessions/rename', {
+        machineId: session.machineId,
+        executorId: session.executorId,
+        nativeSessionId: session.nativeSessionId,
+        title: trimmed,
+      });
+      const match = historyRows.find(s => s.machineId === session.machineId && s.executorId === session.executorId && s.nativeSessionId === session.nativeSessionId);
+      if (match) {
+        if (trimmed) { match.customTitle = trimmed; match.title = trimmed; }
+        else { delete match.customTitle; }
+      }
+      if (trimmed) { session.customTitle = trimmed; session.title = trimmed; }
+      else { delete session.customTitle; }
+      onDone?.(trimmed);
+      paint();
+    } catch (cause) {
+      window.alert('重命名失败：' + (cause.message || '未知错误'));
+    }
+  }
   function paint() {
     const project = store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
     const rootCwd = (project?.workspace?.cwd || '').replace(/\/+$/, '');
     const relOf = dir => !rootCwd || dir === rootCwd ? dir : dir.startsWith(rootCwd + '/') ? './' + dir.slice(rootCwd.length + 1) : dir;
+    const historyById = new Map(historyRows.map(s => [s.nativeSessionId, s]));
     const liveIds = new Set(rows.map(r => r.nativeSessionId).filter(Boolean));
     const dedupHistory = historyRows.filter(s => !liveIds.has(s.nativeSessionId));
     const liveItems = rows.map(item => {
       const execId = item.agent === 'claude' || item.agent === 'claude-code' ? 'claude-code' : item.agent;
+      const meta = item.nativeSessionId ? historyById.get(item.nativeSessionId) : undefined;
+      const displayTitle = meta?.customTitle || item.title || meta?.title || '现场终端';
+      const sessionObj = item.nativeSessionId ? { machineId: item.machineId, machineName: item.machineName, executorId: execId, nativeSessionId: item.nativeSessionId, cwd: item.cwd, title: displayTitle, customTitle: meta?.customTitle } : null;
       return h('article', { class: 'item', dataset: { livePane: item.paneId }, style: { minWidth: 0 } },
         h('div', { class: 'item__main', style: { overflowWrap: 'anywhere' } },
-          h('strong', null, item.title), h('p', { class: 'small muted' }, `${item.agent} · ${item.machineName} · ${relOf(item.cwd)}`),
+          h('strong', null, displayTitle),
+          h('p', { class: 'small muted' }, `${item.agent} · ${item.machineName} · ${relOf(item.cwd)}${item.nativeSessionId ? ` · #${shortId(item.nativeSessionId)}` : ''}`),
           h('div', { class: 'row row--wrap' }, Pill(STATES[item.state] ?? '状态待确认', item.state === 'working' ? 'info' : ''), Pill('现场运行中', 'ok'))),
-        h('div', { class: 'row' },
-          item.nativeSessionId && Button({ label: '分析对话', size: 'sm', onClick: () => openHistoryAnalysis({ machineId: item.machineId, machineName: item.machineName, executorId: execId, nativeSessionId: item.nativeSessionId, cwd: item.cwd }) }),
+        h('div', { class: 'row row--wrap' },
+          sessionObj && Button({ label: '重命名', size: 'sm', onClick: () => renameSession(sessionObj) }),
+          sessionObj && Button({ label: '分析对话', size: 'sm', onClick: () => openHistoryAnalysis(sessionObj) }),
           Button({ label: '打开现场', size: 'sm', onClick: () => open(item) })));
     });
-    const histItems = dedupHistory.slice(0, historyLimit).map(s => h('article', { class: 'item', style: { minWidth: 0 } },
-      h('div', { class: 'item__main', style: { overflowWrap: 'anywhere' } },
-        h('strong', null, `${s.executorId} · ${relOf(s.cwd)}`),
-        h('p', { class: 'small muted' }, `${s.metadataTimestamp || s.fileModifiedAt || '时间未知'} · ${s.nativeSessionId}`),
-        h('div', { class: 'row row--wrap' }, Pill('历史会话'))),
-      Button({ label: '分析对话', size: 'sm', onClick: () => openHistoryAnalysis(s) })));
+    const histItems = dedupHistory.slice(0, historyLimit).map(s => {
+      const label = s.customTitle || s.title || `${s.executorId} · ${relOf(s.cwd)}`;
+      return h('article', { class: 'item', style: { minWidth: 0 } },
+        h('div', { class: 'item__main', style: { overflowWrap: 'anywhere' } },
+          h('strong', null, label),
+          h('p', { class: 'small muted' }, `${s.executorId} · ${relOf(s.cwd)} · ${shortTime(s.fileModifiedAt || s.metadataTimestamp)} · #${shortId(s.nativeSessionId)}`),
+          h('div', { class: 'row row--wrap' }, Pill(s.customTitle ? '已命名' : '历史会话'))),
+        h('div', { class: 'row row--wrap' },
+          Button({ label: '重命名', size: 'sm', onClick: () => renameSession(s) }),
+          Button({ label: '分析对话', size: 'sm', onClick: () => openHistoryAnalysis(s) })));
+    });
     replace(body,
       error && Banner({ tone: 'warn', children: error }),
       historyError && Banner({ tone: 'warn', children: historyError }),
@@ -147,10 +191,15 @@ export function createLiveTerminals({ api, store, router }) {
           const sessions = (data.sessions ?? []).filter(session => inDir(rootCwd, session.cwd) && (!executorId || executorId === 'terminal' || session.executorId === executorId));
           if (!sessions.length) throw new Error('未找到这个目录及子目录的完整会话记录。不会用最近输出代替。');
           replace(analysis, data.truncated && Banner({ tone: 'warn', children: '会话列表未完全读取；请选择已核验的会话，分析时仍会核验其完整日志。' }),
-            h('p', null, '终端未提供可核验的会话 ID。请选择要分析的完整会话（含子目录）：'),
+            h('p', null, '当前终端未自动匹配到活跃会话 ID，可手动选择一条会话或先重命名：'),
             ...sessions.map(session => {
               const rel = session.cwd === rootCwd ? '.' : session.cwd.slice(rootCwd.length).replace(/^\/+/, '');
-              return Button({ label: `${session.metadataTimestamp || session.fileModifiedAt || '时间未知'} · ${rel} · ${session.nativeSessionId}`, onClick: () => begin(session.executorId, session.nativeSessionId, session.cwd) });
+              const titleText = session.customTitle || session.title || `${session.executorId} · ${rel}`;
+              const rowBtn = Button({ label: `${titleText} · ${shortTime(session.fileModifiedAt || session.metadataTimestamp)} · #${shortId(session.nativeSessionId)}`, onClick: () => begin(session.executorId, session.nativeSessionId, session.cwd) });
+              const renameBtn = Button({ label: '重命名', size: 'sm', onClick: () => renameSession({ ...session, machineId: item.machineId }, nextTitle => {
+                rowBtn.textContent = `${nextTitle || session.title || `${session.executorId} · ${rel}`} · ${shortTime(session.fileModifiedAt || session.metadataTimestamp)} · #${shortId(session.nativeSessionId)}`;
+              }) });
+              return h('div', { class: 'row row--wrap', style: { alignItems: 'center' } }, rowBtn, renameBtn);
             }));
           analysing = false; analyse.disabled = false; return;
         }
@@ -190,8 +239,13 @@ export function createLiveTerminals({ api, store, router }) {
       disposed = true; openedItem = undefined; epoch++; clearTimeout(frameTimer); clearTimeout(analysisTimer); terminal?.dispose(); void release(lease); lease = undefined;
       if (drawer?.el.open) drawer.close(); drawer = undefined;
     };
-    drawer = openDrawer({ title: '现场终端', subtitle: `${item.agent} · ${item.cwd}`, wide: true,
-      body: [h('div', { class: 'row row--wrap' }, analyse, h('span', { class: 'small muted' }, '完整会话分段分析，结果显示在下方')), analysis, h('p', { class: 'small muted' }, '打开后只读观察。接管后可直接在终端输入；关闭只断开连接，不停止 Codex 或其他 CLI。终端状态不代表业务任务已完成。'), status, failure, screen, recent],
+    const liveExecId = item.agent === 'claude' || item.agent === 'claude-code' ? 'claude-code' : item.agent;
+    const renameCurrentBtn = item.nativeSessionId && Button({
+      label: '重命名当前会话', size: 'sm',
+      onClick: () => renameSession({ machineId: item.machineId, executorId: liveExecId, nativeSessionId: item.nativeSessionId, title: item.title }),
+    });
+    drawer = openDrawer({ title: item.title || '现场终端', subtitle: `${item.agent} · ${item.cwd}${item.nativeSessionId ? ` · #${shortId(item.nativeSessionId)}` : ''}`, wide: true,
+      body: [h('div', { class: 'row row--wrap' }, analyse, renameCurrentBtn, h('span', { class: 'small muted' }, item.nativeSessionId ? `已锁定当前会话 #${shortId(item.nativeSessionId)}，一键直接分析` : '完整会话分段分析，结果显示在下方')), analysis, h('p', { class: 'small muted' }, '打开后只读观察。接管后可直接在终端输入；关闭只断开连接，不停止 Codex 或其他 CLI。终端状态不代表业务任务已完成。'), status, failure, screen, recent],
       footer: [Button({ label: '关闭观察', onClick: closeTerminal }), Button({ label: '最近输出', onClick: async () => {
         const stamp = epoch;
         try { const value = await call(item.machineId, 'terminal.live.read', { paneId: item.paneId, terminalId: item.terminalId, cwd: item.cwd });
