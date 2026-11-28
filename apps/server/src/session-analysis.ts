@@ -54,14 +54,24 @@ export function createSessionAnalysis(options: {
       signal.throwIfAborted();
       const records: string[] = [];
       if (job.mode === 'recent') {
-        job.detail = '正在读取最近对话片段…'; save(job);
+        const sumKey = `${job.machineId}:${job.executorId}:${job.nativeSessionId}`;
+        const prev = store.get<{ lastOffset: number; summary: string; updatedAt: string }>('session.summaries', sumKey);
+        job.detail = '正在只读抓取最近 16KB 对话…'; save(job);
+        // Strictly read-only tail read (O_RDONLY on execution node); original session files are never modified.
         const page = await call(job, 'agents.transcript', {
-          executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd, tailBytes: 256 * 1024,
+          executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd, tailBytes: 16 * 1024,
         }, signal) as { data?: string; startOffset?: number; nextOffset?: number; snapshot?: { size?: number } };
+        const totalBytes = page.snapshot?.size ?? 0;
+        job.totalBytes = totalBytes;
+        if (prev?.summary && totalBytes > 0 && totalBytes <= prev.lastOffset) {
+          job.text = `${prev.summary}\n\n（会话无新增内容，直接复用 ${prev.updatedAt} 的缓存结论；原始会话未改动。）`;
+          job.status = 'done'; job.detail = '无新增内容，已复用上次结论'; save(job);
+          return;
+        }
         const buf = Buffer.from(String(page.data ?? ''), 'base64');
         const textChunk = buf.toString('utf8');
         const lines = textChunk.split('\n');
-        // Drop the first line when we jumped into the middle of the file so JSON parsing stays clean.
+        // Drop the first line when jumping into the middle of the file so JSON parsing stays clean.
         const startIdx = (page.startOffset ?? 0) > 0 ? 1 : 0;
         for (let i = startIdx; i < lines.length; i++) {
           const line = lines[i]?.trim();
@@ -72,13 +82,24 @@ export function createSessionAnalysis(options: {
           } catch { /* ignore partial trailing line */ }
         }
         job.readBytes = buf.length;
-        job.totalBytes = page.snapshot?.size ?? buf.length;
-        if (!records.length) throw new Error('最近 256KB 日志中没有可总结的公开对话记录');
-        signal.throwIfAborted(); job.status = 'analysing'; job.detail = `已读取最近 ${job.records} 条记录，正在快速总结…`; save(job);
-        const recentBody = records.join('\n\n').slice(-24_000);
-        const text = await (options.analyze ?? analyzeSession)(recentBody, options.config, detail => { job.detail = detail; save(job); }, { signal });
+        if (!records.length) {
+          if (prev?.summary) {
+            job.text = `${prev.summary}\n\n（最近 16KB 无新增公开对话，沿用上次结论。）`;
+            job.status = 'done'; job.detail = '已沿用上次结论'; save(job);
+            return;
+          }
+          throw new Error('最近 16KB 日志中没有可总结的公开对话记录');
+        }
+        signal.throwIfAborted(); job.status = 'analysing'; job.detail = `已只读最近 ${job.records} 条记录，正在生成简明总结…`; save(job);
+        const recentBody = records.join('\n\n').slice(-10_000);
+        const promptInput = prev?.summary
+          ? `【上次结论】\n${prev.summary}\n\n【最新对话片段】\n${recentBody}\n\n请结合上次结论与最新片段，用不超过 10 句大白话更新当前进展（在做什么、刚完成什么、有无卡点或报错、下一步是什么）。`
+          : `【最近对话片段】\n${recentBody}\n\n请用不超过 10 句大白话说清当前进展（在做什么、刚完成什么、有无卡点或报错、下一步是什么）。`;
+        const text = await (options.analyze ?? analyzeSession)(promptInput, options.config, detail => { job.detail = detail; save(job); }, { signal });
         signal.throwIfAborted();
-        job.text = `覆盖范围：快速摘要模式（读取最近 ${Math.round(job.readBytes / 1024)}KB / 共 ${Math.round(job.totalBytes / 1024)}KB，${job.records} 条最近对话及工具记录）。\n\n${text}`;
+        const updatedAt = new Date().toISOString();
+        store.put('session.summaries', sumKey, { lastOffset: totalBytes || buf.length, summary: text, updatedAt });
+        job.text = text;
         job.status = 'done'; job.detail = '最新进展总结完成'; save(job);
         return;
       }
