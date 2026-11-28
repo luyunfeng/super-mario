@@ -71,13 +71,6 @@ function priorityCard(title, sub, rows, link, empty) {
 export function createHomePage({ api, router, scope, store }) {
   const continuation=createContinueRun({api,store,router,scope});
   const body = h('div', { class: 'stack stack--lg' });
-  const el = h('section', { class: 'page', id: 'home' }, h('div', { class: 'page__inner' },
-    h('header', { class: 'page__head' }, h('h1', null, '首页'), Hint('nav.home')), body));
-  const expandedSections = new Set();
-  let brief, briefError, lastRead = 0, request = 0, briefOwner;
-  const hasSnapshot = () => store.view.snapshot && !store.view.unauthorized &&
-    store.view.snapshotOwner === api.draftOwner();
-  const link = (href, text) => h('a', { class: 'home-row', href }, text);
   const guideFrameWrap = h('div', { hidden: true, style: 'margin-top:12px;' });
   let guideLoaded = false;
   const guideToggle = h('button', {
@@ -93,6 +86,9 @@ export function createHomePage({ api, router, scope, store }) {
           title: 'Super Mario 使用教程与架构思路图',
           style: 'width:100%;height:760px;border:1px solid var(--line, #D1CFC5);border-radius:10px;background:#FAF9F5;',
         }));
+      } else if (!opening && guideLoaded) {
+        replace(guideFrameWrap);
+        guideLoaded = false;
       }
     },
   }, '展开动态图解');
@@ -107,14 +103,25 @@ export function createHomePage({ api, router, scope, store }) {
       guideFrameWrap,
     ],
   });
+  guideCard.style.marginTop = '16px';
+  guideCard.hidden = true;
+  const el = h('section', { class: 'page', id: 'home' }, h('div', { class: 'page__inner' },
+    h('header', { class: 'page__head' }, h('h1', null, '首页'), Hint('nav.home')), body, guideCard));
+  const expandedSections = new Set();
+  let brief, briefError, lastRead = 0, request = 0, briefOwner;
+  const hasSnapshot = () => store.view.snapshot && !store.view.unauthorized &&
+    store.view.snapshotOwner === api.draftOwner();
+  const link = (href, text) => h('a', { class: 'home-row', href }, text);
   function draw() {
     const view = store.view;
     if (router.current.page !== 'home') return;
     if (!hasSnapshot()) {
       expandedSections.clear(); ++request; brief = undefined; briefError = ''; lastRead = 0;
+      guideCard.hidden = true;
       replace(body, muted(view.unauthorized ? '请重新连接工作台。' : view.loadError || '正在读取工作台…'));
       return;
     }
+    guideCard.hidden = false;
     if (briefOwner !== view.snapshotOwner) {
       expandedSections.clear(); ++request; brief = undefined; briefError = ''; lastRead = 0; briefOwner = view.snapshotOwner;
     }
@@ -194,8 +201,7 @@ export function createHomePage({ api, router, scope, store }) {
         }),
         chats.length > 0 && muted('有群聊动态：' + chats.map(g => g.name).join('、')),
         window && !chats.length && !updates.some(([,items]) => items.length) && muted('最近 24 小时没有更新。'));
-    }) : muted('当前范围内没有项目。') }),
-    guideCard);
+    }) : muted('当前范围内没有项目。') }));
   }
   scope.subscribe(draw);
   async function readBrief() {
@@ -204,7 +210,8 @@ export function createHomePage({ api, router, scope, store }) {
     lastRead = Date.now();
     const owner = store.view.snapshotOwner;
     const current = () => id === request && hasSnapshot() && owner === store.view.snapshotOwner;
-    brief = undefined; briefError = ''; draw();
+    briefError = '';
+    if (!brief) draw();
     try {
       const result = await api.get('/brief/current');
       if (current()) brief = result.window;

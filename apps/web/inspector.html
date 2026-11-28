@@ -327,7 +327,8 @@
     </section>
   </div>
 
-  <script>
+  <script type="module">
+    import { createApi } from '/js/lib/api.js';
     const CATS = {
       system: { label: '系统提示词', color: '#8B7CF6', bg: 'rgba(139,124,246,0.22)' },
       tools: { label: '工具定义', color: '#5B9BF8', bg: 'rgba(91,155,248,0.20)' },
@@ -341,32 +342,27 @@
 
     const fmtTok = n => n >= 1000000 ? (n / 1000000).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n || 0);
     const qs = new URLSearchParams(location.search);
-
-    function getToken() {
-      const fromUrl = qs.get('token') || new URLSearchParams(location.hash.replace(/^#/, '')).get('token');
-      if (fromUrl) return fromUrl;
-      try {
-        const raw = localStorage.getItem('super-mario-token');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed?.value && (!parsed.expiresAt || parsed.expiresAt > Date.now())) return parsed.value;
-        }
-      } catch {}
-      return '';
+    // Reuse shared API client so URL ?token= is stripped via replaceState and expired URL tokens never lock out re-login.
+    const urlToken = qs.get('token');
+    const apiClient = createApi();
+    if (urlToken) {
+      apiClient.setToken(urlToken);
+      qs.delete('token');
+      const cleanSearch = qs.toString();
+      history.replaceState(null, '', location.pathname + (cleanSearch ? '?' + cleanSearch : '') + location.hash);
     }
 
     async function apiGet(path) {
-      const token = getToken();
-      const res = await fetch('/api/v1' + path, {
-        headers: token ? { Authorization: 'Bearer ' + token } : {},
-      });
-      if (res.status === 401) {
-        document.getElementById('auth-box').hidden = false;
-        throw new Error('unauthorized');
+      try {
+        const data = await apiClient.get(path);
+        document.getElementById('auth-box').hidden = true;
+        return data;
+      } catch (err) {
+        if (err.status === 401) {
+          document.getElementById('auth-box').hidden = false;
+        }
+        throw err;
       }
-      document.getElementById('auth-box').hidden = true;
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
     }
 
     let sessions = [];
@@ -640,24 +636,46 @@
       document.getElementById('cat-tabs').hidden = v !== 'items';
     }
 
+    let sessionRev = 0;
+    let turnRev = 0;
+    let pollingTurn = false;
+
     async function loadTurn() {
+      const rev = ++turnRev;
       if (!currentTurnId) { currentTrace = null; renderTrace(); return; }
       try {
-        currentTrace = await apiGet('/traces/turns/' + encodeURIComponent(currentTurnId));
-      } catch { currentTrace = null; }
+        const trace = await apiGet('/traces/turns/' + encodeURIComponent(currentTurnId));
+        if (rev !== turnRev) return;
+        currentTrace = trace;
+      } catch (err) {
+        if (rev !== turnRev) return;
+        currentTrace = null;
+        if (err.status !== 401) {
+          document.getElementById('hero-sub').textContent = '读取轮次失败：' + (err.message || '网络异常');
+        }
+      }
       renderTrace();
     }
 
     async function loadSession() {
+      const rev = ++sessionRev;
       renderSessions();
       try {
-        currentSessionData = await apiGet('/traces/sessions/' + encodeURIComponent(currentConversationId));
-        if (!currentTurnId && currentSessionData.turns.length) {
-          currentTurnId = currentSessionData.turns[currentSessionData.turns.length - 1].id;
+        const data = await apiGet('/traces/sessions/' + encodeURIComponent(currentConversationId));
+        if (rev !== sessionRev) return;
+        currentSessionData = data;
+        const turns = data?.turns || [];
+        if (!currentTurnId && turns.length) {
+          currentTurnId = turns[turns.length - 1].id;
         }
         renderSparkAndHistory();
         await loadTurn();
-      } catch {}
+      } catch (err) {
+        if (rev !== sessionRev) return;
+        if (err.status !== 401) {
+          document.getElementById('hero-sub').textContent = '读取会话失败：' + (err.message || '网络异常');
+        }
+      }
     }
 
     async function loadAll() {
@@ -668,7 +686,11 @@
           currentConversationId = sessions[0].conversationId;
         }
         await loadSession();
-      } catch {}
+      } catch (err) {
+        if (err.status !== 401) {
+          document.getElementById('hero-sub').textContent = '无法连接工作台：' + (err.message || '网络异常');
+        }
+      }
     }
 
     document.querySelectorAll('#cat-tabs .filter-tab').forEach(btn => {
@@ -679,20 +701,31 @@
     });
     document.getElementById('btn-refresh').addEventListener('click', loadAll);
     document.getElementById('btn-copy').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
       const text = document.getElementById('detail-pre').textContent || '';
-      try { await navigator.clipboard.writeText(text); e.target.textContent = '已复制 ✓'; setTimeout(() => { e.target.textContent = '复制原文'; }, 1200); } catch {}
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = '已复制 ✓';
+      } catch {
+        btn.textContent = '复制失败';
+      }
+      setTimeout(() => { btn.textContent = '复制原文'; }, 1200);
     });
     document.getElementById('token-save').addEventListener('click', () => {
       const val = document.getElementById('token-input').value.trim();
       if (!val) return;
-      localStorage.setItem('super-mario-token', JSON.stringify({ value: val, expiresAt: Date.now() + 30 * 86400000 }));
-      loadAll();
+      apiClient.setToken(val);
+      document.getElementById('token-input').value = '';
+      void loadAll();
     });
 
-    loadAll();
-    setInterval(() => {
-      if (currentTrace?.status === 'pending') loadTurn();
+    void loadAll();
+    const pollTimer = setInterval(async () => {
+      if (document.hidden || pollingTurn || currentTrace?.status !== 'pending') return;
+      pollingTurn = true;
+      try { await loadTurn(); } finally { pollingTurn = false; }
     }, 2000);
+    window.addEventListener('pagehide', () => clearInterval(pollTimer));
   </script>
 </body>
 </html>

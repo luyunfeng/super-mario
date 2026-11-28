@@ -1,3 +1,4 @@
+export { documentHeadings } from './document-headings.ts';
 import type { CommitChanges } from './commit-changes.ts';
 export { commitChanges, type CommitChanges } from './commit-changes.ts';
 import type { ExecutionUsage } from './execution-usage.ts';

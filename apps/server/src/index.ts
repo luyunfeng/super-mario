@@ -28,6 +28,7 @@ import { todoLineage } from '../../../packages/core/src/todo-lineage.ts';
 import { currentWorkerTodo } from './worker-session.ts';
 import { forgetDevice, listSubscriptions, pushNotice, subscribe, unsubscribe, vapidKeys } from '../../../packages/core/src/web-push-subscriptions.ts';
 import { createReadStream } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { readFile, stat } from 'node:fs/promises';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -1147,6 +1148,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!m?.online) throw new InputError('电脑已离线', 503);
           if (!m.capabilities.includes('workspace.code')) throw new InputError('请升级电脑代理以浏览代码', 409);
           const cwd = requiredText(url.searchParams.get('cwd'), '目录');
+          const allowed = app.projects.list().some(p => {
+            if (p.archivedAt || p.workspace?.machineId !== m.id || !p.workspace.cwd) return false;
+            const rel = relative(resolve(p.workspace.cwd), resolve(cwd));
+            return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith('../'));
+          });
+          if (!allowed) throw new InputError('仅支持浏览已绑定项目目录内的代码', 403);
           const kind = url.searchParams.get('kind') ?? 'tree';
           if (!['tree', 'file', 'diff'].includes(kind)) throw new InputError('浏览类型无效');
           return json(res, 200, await machines.call(m.id, 'workspace.code', { cwd, kind, path: url.searchParams.get('path') ?? '' }));
@@ -2049,10 +2056,25 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         let closed = false;
         let pollTimer: ReturnType<typeof setTimeout> | undefined;
         let writeChain = Promise.resolve();
+        let alive = true;
+        ws.on('pong', () => { alive = true; });
+        const heartbeat = setInterval(() => {
+          if (closed) return;
+          if (!alive) { ws.terminate(); return; }
+          alive = false;
+          if (ws.readyState === WebSocket.OPEN) ws.ping();
+        }, 20_000);
+        heartbeat.unref?.();
+        const offMachine = app.events.subscribe(event => {
+          if (closed || event.type !== 'machines.changed') return;
+          if (!machines.list().some(item => item.id === machineId && item.online)) fail(new Error('执行机已离线'));
+        });
         const cleanup = () => {
           if (closed) return;
           closed = true;
           clearTimeout(pollTimer);
+          clearInterval(heartbeat);
+          void offMachine();
           if (connectionId) {
             const id = connectionId; connectionId = '';
             void machines.call(machineId, 'terminal.live.release', { connectionId: id }).catch(() => {});

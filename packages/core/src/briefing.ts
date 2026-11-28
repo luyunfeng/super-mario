@@ -40,10 +40,12 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
   }).sort((a,b)=>b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
   const runs = store.list<Run>('runs');
   const todos = store.list<Todo>('todos');
+  const todoById = new Map(todos.map(t => [t.id, t]));
   const completedTodoIds = new Set(todos.filter(t => t.completedAt && beforeEnd(t.completedAt)).map(t => t.id));
   const approvals = store.list<Approval>('approvals').filter(a => a.status === 'pending' && beforeEnd(a.createdAt));
   const cards = store.list<{id:string;title:string;projectId?:string;status:string;createdAt:string}>('interactions').filter(c => c.status === 'open' && beforeEnd(c.createdAt));
   const plans = store.list<{id:string;title:string;status:string;createdAt:string;tasks:{projectId?:string}[]}>('plans').filter(p => p.status === 'pending' && beforeEnd(p.createdAt));
+  const planOrigins = new Map(plans.map(p => [p.id, store.get<{projectId?:string}>('plan-origins', p.id)]));
   return { from, to, basis:'持久记录的最新状态；执行结束不代表待办验收完成。待决定包含此前积压。', projects:[...projects.map(p => ({id:p.id,name:p.name})),...(projectId === undefined ? [{id:'',name:'未归项目'}] : [])].map(project => {
     const scopedRuns = runs.filter(r => (r.projectId ?? '') === project.id);
     const scopedTodos = todos.filter(t => (t.projectId ?? '') === project.id);
@@ -83,10 +85,10 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
       ended: scopedRuns.filter(r => r.status === 'completed' && changed(r.updatedAt) && !(r.todoId && completedTodoIds.has(r.todoId))).map(r => ({id:r.id,title:r.prompt,result:r.output.slice(0,800)})),
       failed: scopedRuns.filter(r => r.status === 'failed' && changed(r.updatedAt)).map(r => ({id:r.id,title:r.prompt,error:(r.error || r.output).slice(0,800)})),
       decisions: [...conversations.filter(c=>c.status==='waiting_user'&&(c.projectId??'')===project.id).map(c=>({id:c.id,href:pendingDecisionHref('conversations',c.id),title:`${c.title}：${c.question}`})),...cards.filter(c => (c.projectId ?? '') === project.id).map(c => ({id:c.id,href:pendingDecisionHref('interactions',c.id),title:c.title})),...approvals.filter(a => {
-        const todo = a.todoId ? todos.find(t => t.id === a.todoId) : undefined;
+        const todo = a.todoId ? todoById.get(a.todoId) : undefined;
         return (todo?.projectId ?? (typeof a.params.projectId === 'string' ? a.params.projectId : '')) === project.id;
       }).map(a => ({id:a.id,href:pendingDecisionHref('approvals',a.id),title:a.title})),...plans.filter(p => {
-        const origin=store.get<{projectId?:string}>('plan-origins',p.id);
+        const origin = planOrigins.get(p.id);
         return p.tasks.some(t => (t.projectId ?? origin?.projectId ?? '') === project.id);
       }).map(p=>({id:p.id,href:pendingDecisionHref('plans',p.id),title:p.title}))],
     };

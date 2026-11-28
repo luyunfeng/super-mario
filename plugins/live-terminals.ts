@@ -27,7 +27,9 @@ export function detectScreenPrompt(rawText: string): DetectedScreenPrompt | unde
   const lines = clean.split('\n').map(l => l.trimEnd()).filter(l => l.trim().length > 0).slice(-28);
   if (!lines.length) return undefined;
   const tail = lines.slice(-14).join('\n');
-  const rev = createHash('sha256').update(tail).digest('hex').slice(0, 16);
+  // Strip spinner glyphs and elapsed-second counters so status-bar ticks do not churn rev every scan.
+  const stableTail = tail.replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒]/g, '').replace(/\b\d+(?:\.\d+)?s\b/g, 'Xs');
+  const rev = createHash('sha256').update(stableTail).digest('hex').slice(0, 16);
 
   if (/(?:do you trust|trust the files in this folder|trust this workspace|yes,\s*(?:i trust|proceed))/i.test(tail)) {
     return {
@@ -250,7 +252,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
     } catch { /* older herdr or fake test binary without process-info */ }
     return undefined;
   }
-  async function list(cwd?: string, exact = false, endpoint = env): Promise<LivePane[]> {
+  async function list(cwd?: string, exact = false, endpoint = env, resolveNativeSession = true): Promise<LivePane[]> {
     const expected = cwd ? await realpath(text(cwd)) : undefined;
     // A per-tab pane.focused flag may be true in several tabs. The snapshot
     // identifies the one pane displayed by the whole session.
@@ -276,7 +278,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
         : typeof pane.agent_session === 'string' && pane.agent_session.trim() ? pane.agent_session.trim()
         : typeof native.id === 'string' && native.id.trim() ? native.id.trim()
         : undefined;
-      if (!nativeSessionId && !exact) {
+      if (!nativeSessionId && !exact && resolveNativeSession) {
         nativeSessionId = await resolveNativeSessionFromPane(pane.pane_id, agent, endpoint);
       }
       result.push({ paneId: pane.pane_id, terminalId: pane.terminal_id, cwd: directory,
@@ -475,7 +477,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
       return { focused: true };
     },
     'terminal.live.scan_prompts': async params => {
-      const panes = await list(row(params).cwd);
+      const panes = await list(row(params).cwd, false, env, false);
       const prompts: Array<Record<string, unknown>> = [];
       for (const pane of panes.slice(0, 24)) {
         if (pane.state === 'working') continue;

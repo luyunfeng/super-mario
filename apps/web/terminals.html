@@ -366,7 +366,14 @@
       };
       let failure = '';
       ws.onmessage = ev => {
-        const msg = JSON.parse(ev.data);
+        let msg;
+        try {
+          msg = JSON.parse(ev.data);
+        } catch {
+          failure = '终端数据格式异常';
+          disconnected(failure);
+          return;
+        }
         if (msg.type === 'ready') {
           conn.ready = true;
           conn.session = msg.session || conn.session;
@@ -376,10 +383,15 @@
           if (interactive) term.focus();
           if (full) void syncFocus(conn);
         } else if (msg.type === 'frame') {
-          if (!full && msg.width && msg.height && (term.cols !== msg.width || term.rows !== msg.height)) term.resize(msg.width, msg.height);
-          if (!full && msg.full && conn.painted) term.write('\x1bc');
-          term.write(dec(msg.data));
-          conn.painted = true;
+          try {
+            if (!full && msg.width && msg.height && (term.cols !== msg.width || term.rows !== msg.height)) term.resize(msg.width, msg.height);
+            if (!full && msg.full && conn.painted) term.write('\x1bc');
+            term.write(dec(msg.data));
+            conn.painted = true;
+          } catch {
+            failure = '终端画面解码失败';
+            disconnected(failure);
+          }
         } else if (msg.type === 'error') {
           failure = msg.message || '终端连接失败';
           disconnected(failure);
@@ -696,20 +708,23 @@
         if (fullConn === conn) { setRoot(''); document.getElementById('top-sub').textContent = error.message; }
       } finally { conn.pendingFocus = false; }
     }
-    setInterval(() => void syncFocus(fullConn), 2500);
+    const focusTimer = setInterval(() => void syncFocus(fullConn), 2500);
 
     // Auto-takeover drawer
+    let takeoverRev = 0;
     async function loadTakeover() {
+      const rev = ++takeoverRev;
+      const listEl = document.getElementById('takeover-list');
       try {
         const data = await api('GET', '/takeover');
+        if (rev !== takeoverRev) return;
         document.getElementById('chk-takeover-enabled').checked = Boolean(data.settings?.enabled);
         document.getElementById('chk-takeover-trust').checked = Boolean(data.settings?.autoTrustBoundProjects);
-        const listEl = document.getElementById('takeover-list');
         const items = data.items || [];
         listEl.innerHTML = items.length ? items.slice(0, 30).map(item => `
           <div class="pane-card" style="cursor:default;">
-            <div class="pane-card-title">${esc(item.title)} · ${esc(item.paneTitle)}</div>
-            <div class="pane-card-meta">${esc(item.status)} · ${esc(item.cwd.split('/').slice(-2).join('/'))}</div>
+            <div class="pane-card-title">${esc(item.title || '')} · ${esc(item.paneTitle || '')}</div>
+            <div class="pane-card-meta">${esc(item.status || '')} · ${esc((item.cwd || '').split('/').slice(-2).join('/'))}</div>
             ${item.actionNote ? `<div style="font-size:11.5px;color:var(--text-2);margin-top:4px;">${esc(item.actionNote)}</div>` : ''}
             ${item.status === 'open' ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px;">
               ${(item.options || []).map(o => `<button class="btn" data-tk-key="${esc(item.key)}" data-tk-keys="${esc(o.keys)}" style="padding:3px 7px;font-size:11px;">${esc(o.label)}</button>`).join('')}
@@ -719,11 +734,19 @@
         listEl.querySelectorAll('[data-tk-key]').forEach(btn => {
           btn.addEventListener('click', async () => {
             btn.disabled = true;
-            try { await api('POST', '/takeover/answer', { key: btn.dataset.tkKey, keys: btn.dataset.tkKeys }); } catch {}
+            try {
+              await api('POST', '/takeover/answer', { key: btn.dataset.tkKey, keys: btn.dataset.tkKeys });
+            } catch (err) {
+              listEl.insertAdjacentHTML('afterbegin', `<div style="padding:8px;color:#b42318;font-size:12px;">操作失败：${esc(err.message || '未知错误')}</div>`);
+            }
             void loadTakeover();
           });
         });
-      } catch {}
+      } catch (err) {
+        if (rev === takeoverRev) {
+          listEl.innerHTML = `<div style="padding:16px;color:#b42318;text-align:center;">加载接管状态失败：${esc(err.message || '网络异常')}</div>`;
+        }
+      }
     }
     document.getElementById('btn-takeover').addEventListener('click', (e) => {
       const sb = document.getElementById('takeover-sidebar');
@@ -732,16 +755,30 @@
       if (!sb.hidden) void loadTakeover();
       triggerFullResize();
     });
-    document.getElementById('btn-takeover-scan').addEventListener('click', async () => {
-      await api('POST', '/takeover/scan', {});
+    document.getElementById('btn-takeover-scan').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        await api('POST', '/takeover/scan', {});
+      } catch (err) {
+        document.getElementById('takeover-list').innerHTML = `<div style="padding:16px;color:#b42318;text-align:center;">扫描失败：${esc(err.message || '未知错误')}</div>`;
+      } finally {
+        btn.disabled = false;
+      }
       void loadTakeover();
     });
     for (const id of ['chk-takeover-enabled', 'chk-takeover-trust']) {
-      document.getElementById(id).addEventListener('change', async () => {
-        await api('PUT', '/takeover', {
-          enabled: document.getElementById('chk-takeover-enabled').checked,
-          autoTrustBoundProjects: document.getElementById('chk-takeover-trust').checked,
-        });
+      document.getElementById(id).addEventListener('change', async (e) => {
+        const el = e.currentTarget;
+        try {
+          await api('PUT', '/takeover', {
+            enabled: document.getElementById('chk-takeover-enabled').checked,
+            autoTrustBoundProjects: document.getElementById('chk-takeover-trust').checked,
+          });
+        } catch (err) {
+          el.checked = !el.checked;
+          document.getElementById('takeover-list').insertAdjacentHTML('afterbegin', `<div style="padding:8px;color:#b42318;font-size:12px;">保存配置失败：${esc(err.message || '未知错误')}</div>`);
+        }
       });
     }
     window.addEventListener('resize', triggerFullResize);
@@ -749,7 +786,11 @@
       document.getElementById('files-sidebar').hidden = true;
       document.getElementById('btn-files').classList.remove('active');
     }
-    window.addEventListener('pagehide', stopAllModes);
+    window.addEventListener('pagehide', () => {
+      clearInterval(focusTimer);
+      clearTimeout(resizeTimer);
+      stopAllModes();
+    });
     void bootstrap();
   </script>
 </body>

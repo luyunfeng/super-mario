@@ -20,17 +20,21 @@ export function createLiveTerminals({ api, store, router }) {
     store.view.snapshot?.projects?.find(p => p.id === projectId)?.archivedAt,
     (store.view.snapshot?.machines ?? []).map(m => [m.id, m.online, m.connectedAt, m.agentInstanceId, m.capabilities])]);
   const call = (machineId, method, params) => api.post(`/machines/${encodeURIComponent(machineId)}/call`, { method, params });
-  function paintHistory() { paint(); }
   async function loadHistory() {
     if (!visible()) return;
+    const stamp = revision, scopeId = projectId;
     historyLoading = true; historyError = ''; paint();
     try {
-      const qs = projectId !== 'all' ? `?projectId=${encodeURIComponent(projectId)}` : '';
+      const qs = scopeId !== 'all' ? `?projectId=${encodeURIComponent(scopeId)}` : '';
       const data = await api.get(`/agents/sessions${qs}`);
+      if (stamp !== revision || scopeId !== projectId || !visible()) return;
       const list = (data.machines ?? []).flatMap(m => (m.sessions ?? []).map(s => ({ ...s, machineId: m.machineId, machineName: m.machineName })));
       list.sort((a, b) => String(b.fileModifiedAt || b.metadataTimestamp || '').localeCompare(String(a.fileModifiedAt || a.metadataTimestamp || '')));
       historyRows = list;
-    } catch (cause) { historyError = cause.message; }
+    } catch (cause) {
+      if (stamp !== revision || scopeId !== projectId || !visible()) return;
+      historyError = cause.message;
+    }
     historyLoading = false; paint();
   }
   function openHistoryAnalysis(session) {
@@ -38,21 +42,21 @@ export function createLiveTerminals({ api, store, router }) {
     let timerId, closed = false;
     openDrawer({
       title: `会话分析 · ${session.executorId}`,
-      sub: `${session.machineName || session.machineId} · ${session.cwd}`,
+      subtitle: `${session.machineName || session.machineId} · ${session.cwd}`,
       body: box,
       onClose() { closed = true; clearTimeout(timerId); },
     });
     const poll = async job => {
       if (closed) return;
       if (job.status === 'done') {
-        replace(box, h('div', { class: 'msg__bubble' }, renderFormattedText(job.result?.summary || '分析已完成。')));
+        replace(box, h('div', { class: 'msg__bubble' }, renderFormattedText(job.text || job.detail || '分析已完成。')));
         return;
       }
-      if (job.status === 'failed' || job.status === 'cancelled') {
-        replace(box, Banner({ tone: 'danger', children: job.error || '分析未完成。' }));
+      if (job.status === 'failed' || job.status === 'unknown' || job.status === 'cancelled') {
+        replace(box, Banner({ tone: job.status === 'unknown' ? 'warn' : 'danger', children: job.detail || job.error || '分析未完成。' }));
         return;
       }
-      replace(box, h('p', { role: 'status' }, `${job.progress || '正在分析完整对话…'}`));
+      replace(box, h('p', { role: 'status' }, `${job.detail || '正在分析完整对话…'}`));
       timerId = setTimeout(async () => {
         try { await poll(await api.get(`/agents/sessions/analysis/${encodeURIComponent(job.id)}`)); }
         catch (cause) { if (!closed) replace(box, Banner({ tone: 'danger', children: cause.message })); }
@@ -64,7 +68,7 @@ export function createLiveTerminals({ api, store, router }) {
   }
   function paint() {
     const project = store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
-    const rootCwd = project?.workspace?.cwd || '';
+    const rootCwd = (project?.workspace?.cwd || '').replace(/\/+$/, '');
     const relOf = dir => !rootCwd || dir === rootCwd ? dir : dir.startsWith(rootCwd + '/') ? './' + dir.slice(rootCwd.length + 1) : dir;
     const liveIds = new Set(rows.map(r => r.nativeSessionId).filter(Boolean));
     const dedupHistory = historyRows.filter(s => !liveIds.has(s.nativeSessionId));
@@ -237,7 +241,7 @@ export function createLiveTerminals({ api, store, router }) {
     void connect('observe');
   }
   router.subscribe(() => { if (!visible()) { clearTimeout(timer); revision++; closeTerminal(); } });
-  return { el, show(id) { if (id !== projectId) { projectId = id; revision++; rows = []; historyRows = []; closeTerminal(); signature = context(); } if (visible()) { void load(); void loadHistory(); } }, update() {
-    const key = context(); if (key !== signature) { signature = key; revision++; rows = []; historyRows = []; closeTerminal(); if (visible()) { void load(); void loadHistory(); } }
+  return { el, show(id) { if (id !== projectId) { projectId = id; revision++; rows = []; historyRows = []; historyLimit = 15; closeTerminal(); signature = context(); } if (visible()) { void load(); void loadHistory(); } }, update() {
+    const key = context(); if (key !== signature) { signature = key; revision++; rows = []; historyRows = []; historyLimit = 15; closeTerminal(); if (visible()) { void load(); void loadHistory(); } }
   } };
 }

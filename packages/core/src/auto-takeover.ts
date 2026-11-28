@@ -93,6 +93,8 @@ export function createAutoTakeover(options: {
   async function answerPrompt(key: string, keys: string, by: 'auto' | 'user' = 'user'): Promise<TakeoverPrompt> {
     const rec = store.get<TakeoverPrompt>(recordsCollection, key);
     if (!rec) throw Object.assign(new Error('未找到对应的终端卡点记录'), { status: 404 });
+    if (rec.status !== 'open') throw Object.assign(new Error('该终端卡点已处理，无需重复操作'), { status: 409 });
+    if (!rec.options.some(opt => opt.keys === keys)) throw Object.assign(new Error('不支持的终端按键选项'), { status: 400 });
     const hub = options.machines();
     if (!hub) throw Object.assign(new Error('执行机网关未就绪'), { status: 503 });
     if (by==='auto' && options.verifyAutomaticKeys) {
@@ -111,11 +113,20 @@ export function createAutoTakeover(options: {
       ? { ...rec, status: by === 'auto' ? 'auto_answered' : 'user_answered', actionNote: by === 'auto' ? '命中已绑定项目目录信任规则，已自动放行' : '已由用户通过工作台远程按键确认', updatedAt: now }
       : { ...rec, status: 'withdrawn', actionNote: '终端画面已变化（可能已在本地处理），未重复按键', updatedAt: now };
     store.put(recordsCollection, key, updated);
-    if (rec.cardId && updated.status === 'withdrawn') {
+    if (rec.cardId) {
       try { options.withdrawCard?.(rec.cardId); } catch {}
     }
     events.publish('takeover.changed', { key, status: updated.status });
     return updated;
+  }
+
+  function pruneClosedRecords() {
+    const closedRecords = store.list<TakeoverPrompt>(recordsCollection)
+      .filter(rec => rec.status !== 'open')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    for (const stale of closedRecords.slice(60)) {
+      store.remove(recordsCollection, stale.key);
+    }
   }
 
   async function scanOnce(): Promise<TakeoverPrompt[]> {
@@ -126,14 +137,20 @@ export function createAutoTakeover(options: {
     scanning = true;
     try {
       const online = hub.list().filter(m => m.online && m.capabilities.includes('terminal.live.scan_prompts'));
+      const succeededMachines = new Set<string>();
       const seenKeys = new Set<string>();
       const now = new Date().toISOString();
 
-      for (const m of online) {
-        let scanned: { prompts?: Array<{ paneId: string; terminalId: string; cwd: string; title: string; agent: string; prompt: { kind: 'trust_dir' | 'permission' | 'choice'; rev: string; title: string; excerpt: string; options: Array<{ label: string; keys: string }> } }> };
-        try {
-          scanned = await hub.call(m.id, 'terminal.live.scan_prompts', {}, { timeoutMs: 12000 }) as typeof scanned;
-        } catch { continue; }
+      type ScannedResult = { prompts?: Array<{ paneId: string; terminalId: string; cwd: string; title: string; agent: string; prompt: { kind: 'trust_dir' | 'permission' | 'choice'; rev: string; title: string; excerpt: string; options: Array<{ label: string; keys: string }> } }> };
+      const settled = await Promise.allSettled(online.map(async m => ({
+        machine: m,
+        scanned: await hub.call(m.id, 'terminal.live.scan_prompts', {}, { timeoutMs: 12000 }) as ScannedResult,
+      })));
+
+      for (const outcome of settled) {
+        if (outcome.status !== 'fulfilled') continue;
+        const { machine: m, scanned } = outcome.value;
+        succeededMachines.add(m.id);
         for (const item of scanned.prompts ?? []) {
           const key = `${m.id}:${item.terminalId}:${item.prompt.rev}`;
           seenKeys.add(key);
@@ -187,16 +204,17 @@ export function createAutoTakeover(options: {
         }
       }
 
-      // Withdraw stale open prompts whose terminal screen already moved on (answered locally).
+      // Withdraw stale open prompts only for machines whose scan actually succeeded.
       for (const rec of store.list<TakeoverPrompt>(recordsCollection)) {
         if (rec.status !== 'open') continue;
-        if (!online.some(m => m.id === rec.machineId)) continue;
+        if (!succeededMachines.has(rec.machineId)) continue;
         if (!seenKeys.has(rec.key)) {
           store.put(recordsCollection, rec.key, { ...rec, status: 'withdrawn', actionNote: '终端对话框已消失（可能已在本地电脑处理）', updatedAt: now });
           if (rec.cardId) { try { options.withdrawCard?.(rec.cardId); } catch {} }
           events.publish('takeover.changed', { key: rec.key, status: 'withdrawn' });
         }
       }
+      pruneClosedRecords();
     } finally {
       scanning = false;
     }
@@ -204,9 +222,11 @@ export function createAutoTakeover(options: {
   }
 
   function list(): TakeoverPrompt[] {
-    return store.list<TakeoverPrompt>(recordsCollection)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .slice(0, 100);
+    const all = store.list<TakeoverPrompt>(recordsCollection)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const open = all.filter(rec => rec.status === 'open');
+    const recentClosed = all.filter(rec => rec.status !== 'open').slice(0, 20);
+    return [...open, ...recentClosed];
   }
 
   function reschedule() {

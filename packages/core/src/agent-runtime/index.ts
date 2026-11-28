@@ -1052,7 +1052,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const flushTrace = (force = false) => {
           if (!activeTrace) return;
           const now = Date.now();
-          if (!force && now - lastTraceWrite < 250) return;
+          if (!force && now - lastTraceWrite < 1500) return;
           try { activeQuote?.check?.(); } catch (error) { progressFailure = error; return; }
           lastTraceWrite = now;
           const dynamicItems: AgentTraceContextItem[] = [

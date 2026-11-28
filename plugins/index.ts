@@ -1,5 +1,7 @@
 export {webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, eraseWebConversationRegistration} from './web-conversations.ts';
-import { documentHeadings } from '../packages/core/src/document-headings.ts';
+export { localDayFormatter } from './local-day.ts';
+export { createGithubConnector, DEFAULT_IGNORED_BRANCHES, type GithubConnectorState } from './github-connector.ts';
+import { documentHeadings } from '../packages/protocol/src/index.ts';
 import { mailTools } from './mail-tools.ts';
 import { createMailConnector } from './mail-connector.ts';
 import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';

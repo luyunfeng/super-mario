@@ -72,6 +72,7 @@ export function createShell({ api, store, router, scope }) {
     store.reset();
   });
   let shownCredential=api.draftOwner();
+  let wasUnauthorized = false;
   tokenInput.value = api.token();
 
   const terminalsLink = Button({ label: '多屏现场', size: 'sm', onClick: () => openTerminalWall(api, scope.get()) });
@@ -113,14 +114,15 @@ export function createShell({ api, store, router, scope }) {
     },
     setConnection({ connection, unauthorized, loadError, snapshot }) {
       disconnect.hidden=!api.token();
-      devicesLink.hidden=unauthorized || !snapshot?.plugins.some(plugin=>plugin.id==='browser-devices' && plugin.status==='active');
+      devicesLink.hidden=unauthorized || !snapshot?.plugins?.some(plugin=>plugin.id==='browser-devices' && plugin.status==='active');
       if(shownCredential!==api.draftOwner()){shownCredential=api.draftOwner();tokenInput.value='';}
       const tone = connection === 'online' ? 'ok' : connection === 'connecting' ? 'warn' : 'danger';
       connDot.className = `dot dot--${tone}`;
       connLabel.textContent = unauthorized ? '需要令牌' : connection === 'online' ? '已连接' : connection === 'connecting' ? '连接中' : '重连中';
       connMessage.textContent = unauthorized ? (loadError || '访问令牌无效，请重新输入。')
         : connection === 'online' ? '实时更新已连接，数据会自动更新。' : '连接已断开，正在自动重连。';
-      if (unauthorized) toggleConn(true);
+      if (unauthorized && !wasUnauthorized) toggleConn(true);
+      wasUnauthorized = Boolean(unauthorized);
     },
     showLoading(text) { loading.hidden = !text; if (text) loading.firstChild.textContent = text; },
     showFailure(content) { failure.hidden = !content; replace(failure, content); },

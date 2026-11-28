@@ -1,4 +1,4 @@
-import { localDayFormatter } from '../../../plugins/local-day.ts';
+import { localDayFormatter, createGithubConnector, DEFAULT_IGNORED_BRANCHES, type GithubConnectorState } from '../../../plugins/index.ts';
 import { issueMessageFileTickets, readChatFile, uploadChatFile, sweepChatFiles } from './chat-files.ts';
 import { readChatImage } from './chat-images.ts';
 import type { ChatFileInput, ChatImageInput } from '../../protocol/src/index.ts';
@@ -43,7 +43,6 @@ import { actionTodoLink } from './todo-link.ts';
 import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
 import { createProjectLessonLearner } from './project-lesson-learner.ts';
-import { createGithubConnector, DEFAULT_IGNORED_BRANCHES, type GithubConnectorState } from '../../../plugins/github-connector.ts';
 import { configureMailConnector } from './mail-connector-settings.ts';
 import { MAIL_POLL_SERVICE } from '../../protocol/src/index.ts';
 import { createTranscription, transcriptionEngine } from './transcription.ts';

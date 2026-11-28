@@ -92,6 +92,9 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
     return entry;
   }
 
+  let cachedSig: string | undefined;
+  let cachedEntries: KnowledgeEntry[] | undefined;
+
   return {
     supportsCreateOnly: true,
     async revision(id, commit) {
@@ -134,20 +137,31 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
       validateScope(query.layer, query.projectId);
       if (query.query !== undefined && typeof query.query !== 'string') throw new Error('query must be a string');
       ensureDirectory();
-      const entries: KnowledgeEntry[] = [];
-      for (const file of readdirSync(directory, { withFileTypes: true })) {
-        if (!file.name.endsWith('.md')) continue;
+      const files = readdirSync(directory, { withFileTypes: true }).filter(file => file.name.endsWith('.md'));
+      const sigParts: string[] = [];
+      for (const file of files) {
         if (!file.isFile()) throw new Error(`Knowledge Markdown must be a regular file: ${file.name}`);
-        entries.push(readEntry(file.name.slice(0, -3)));
+        const st = lstatSync(join(directory, file.name));
+        sigParts.push(`${file.name}:${st.ino}:${st.mtimeMs}:${st.ctimeMs}:${st.size}`);
       }
-      // Reconcile only after every file parses, so corrupt Markdown cannot erase the index.
-      context.store.transaction(() => {
-        const ids = new Set(entries.map(entry => entry.id));
-        for (const old of context.store.list<KnowledgeEntry>(collection)) {
-          if (!ids.has(old.id)) context.store.remove(collection, old.id);
-        }
-        for (const entry of entries) context.store.put(collection, entry.id, entry);
-      });
+      sigParts.sort();
+      const dirSig = sigParts.join('|');
+      let entries: KnowledgeEntry[];
+      if (cachedSig === dirSig && cachedEntries) {
+        entries = cachedEntries;
+      } else {
+        entries = files.map(file => readEntry(file.name.slice(0, -3)));
+        // Reconcile only after every file parses, so corrupt Markdown cannot erase the index.
+        context.store.transaction(() => {
+          const ids = new Set(entries.map(entry => entry.id));
+          for (const old of context.store.list<KnowledgeEntry>(collection)) {
+            if (!ids.has(old.id)) context.store.remove(collection, old.id);
+          }
+          for (const entry of entries) context.store.put(collection, entry.id, entry);
+        });
+        cachedSig = dirSig;
+        cachedEntries = entries;
+      }
       const keywords = (query.query ?? '').trim().normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);
       const aliasHits = new Set<string>();
       const titleHits = new Set<string>();

@@ -170,7 +170,9 @@ const TRACE_COUNT_COLLECTION = 'agent.trace-counts';
 
 export function saveTurnTrace(store: Pick<Store, 'get' | 'put' | 'list' | 'remove'>, trace: AgentTurnTrace) {
   try {
+    const isNew = store.get(TRACE_COLLECTION, trace.id) === undefined;
     store.put(TRACE_COLLECTION, trace.id, publicTurnTrace(trace));
+    if (!isNew) return;
     // Reading the whole trace table costs what the table weighs, which grows with the workbench.
     // A conversation is trimmed only once it holds more than the limit, so a count per
     // conversation says when that is, and the table is read only then.

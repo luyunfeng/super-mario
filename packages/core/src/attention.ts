@@ -67,6 +67,12 @@ interface AttentionInput {
 
 export function* actionableInbox({ inbox = [], inboxConversations = [], mailboxes = [], channels }: AttentionInput) {
   const covered = new Set(inboxConversations.flatMap(group => group.messageIds));
+  const mailboxByResultId = new Map<string, MailboxEntry>();
+  for (const entry of mailboxes) {
+    if (entry.direction === 'inbox' && entry.resultId && !mailboxByResultId.has(entry.resultId)) {
+      mailboxByResultId.set(entry.resultId, entry);
+    }
+  }
   for (const item of inbox) {
     if (covered.has(item.id) || item.tier !== 'action' || item.archivedAt || excludesPersonalGroupFromBrief(item)) continue;
     const matchedChannel = channels?.find(channel => item.source.startsWith(channel.sourcePrefix ?? `${channel.id}:`));
@@ -77,7 +83,7 @@ export function* actionableInbox({ inbox = [], inboxConversations = [], mailboxe
     if (!allowedSource) continue;
     // Mailbox records only enrich source context. They are not another copy of the
     // same message and do not create unsupported mailbox-to-todo actions.
-    const linked = mailboxes.find(entry => entry.direction === 'inbox' && entry.resultId === item.id);
+    const linked = mailboxByResultId.get(item.id);
     const projectId = item.projectId ?? (linked && 'projectId' in linked.scope ? linked.scope.projectId : undefined);
     yield { item, matchedChannel, projectId };
   }
@@ -167,11 +173,13 @@ export function collectAttention({ reviews = [], inboxConversations = [], approv
   // Robot event mail is another channel source, not a fourth user-facing entity.
   // Unmarked input must be classified before confirmation; no implicit global route.
   const mailboxChannelName = channels?.[0]?.name || '飞书';
+  const inboxIds = new Set(inbox.map(entry => entry.id));
+  const botById = new Map(bots.map(bot => [bot.id, bot]));
   for (const item of mailboxes) {
-    if (item.status !== 'pending' || !item.requiresConfirmation || (item.resultId && inbox.some(entry => entry.id === item.resultId))) continue;
+    if (item.status !== 'pending' || !item.requiresConfirmation || (item.resultId && inboxIds.has(item.resultId))) continue;
     const unmarked = item.scope.kind === 'unmarked';
     const projectId = 'projectId' in item.scope ? item.scope.projectId : undefined;
-    const bot = bots.find(bot => bot.id === item.botId);
+    const bot = botById.get(item.botId);
     const outgoing = item.direction === 'outbox';
     rows.push({ id: `mailbox:${item.id}`, type: outgoing ? 'approval' : 'inbox', version: item.version, title: item.title,
       context: unmarked ? '先选择全局、项目或待办范围，再确认处理。' : outgoing ? '确认后由机器人发送，不以你的个人身份代发。' : '确认后交给 Agent 处理，不代表任务已完成。',
