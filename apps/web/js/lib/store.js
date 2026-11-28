@@ -8,6 +8,9 @@ export function createStore(api) {
   let epoch = 0;
   let inFlight = null;
   let queued = false;
+  let msgInFlight = null;
+  let msgQueued = false;
+  let msgTimer;
   let socket;
   let reconnectTimer;
   let refreshTimer;
@@ -15,6 +18,40 @@ export function createStore(api) {
 
   const emit = () => { for (const fn of listeners) fn(view); };
   const set = (patch) => { Object.assign(view, patch); emit(); };
+
+  function refreshMainMessages() {
+    if (!view.snapshot) return refresh();
+    if (msgInFlight) { msgQueued = true; return msgInFlight; }
+    const stamp = epoch;
+    const owner = api.draftOwner?.();
+    const run = (async () => {
+      try {
+        const data = await api.get('/messages/main');
+        if (stamp !== epoch || owner !== api.draftOwner?.() || !view.snapshot) return;
+        const messageQueueChanges = [...queueChanges];
+        queueChanges.clear();
+        set({ snapshot: { ...view.snapshot, messages: data.messages ?? [] }, messageQueueChanges });
+      } catch {
+        // Fall back to full refresh on error.
+        scheduleRefresh();
+      } finally {
+        if (msgInFlight === run) {
+          msgInFlight = null;
+          if (msgQueued && stamp === epoch) {
+            msgQueued = false;
+            scheduleMainMessages();
+          }
+        }
+      }
+    })();
+    msgInFlight = run;
+    return run;
+  }
+
+  function scheduleMainMessages() {
+    clearTimeout(msgTimer);
+    msgTimer = setTimeout(() => { void refreshMainMessages(); }, 40);
+  }
 
   function refresh() {
     if (inFlight) {
@@ -84,7 +121,8 @@ export function createStore(api) {
       }
       if (event?.type === 'messages.changed' && typeof event.data?.conversationId === 'string') {
         queueChanges.add(event.data.conversationId);
-        scheduleRefresh();
+        if (event.data.conversationId === 'main' && view.snapshot) scheduleMainMessages();
+        else scheduleRefresh();
         return;
       }
       if (event?.type === 'message-attachment.revoked' && typeof event.data?.messageId === 'string') {
@@ -170,7 +208,10 @@ export function createStore(api) {
       epoch += 1;
       inFlight = null;
       queued = false;
+      msgInFlight = null;
+      msgQueued = false;
       clearTimeout(refreshTimer);
+      clearTimeout(msgTimer);
       queueChanges.clear();
       set({ messageQueueChanges:[], snapshot: null, snapshotOwner: null, attention: [], savedPromptsChange: null, webConversationChange: null, workspaceBoardRevision: null, workspaceBoardFlowChange: null, savedSearchesRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, revokedAttachment: null, feishuBotChange: null, unauthorized: false, loadError: '' });
       connect();

@@ -125,7 +125,7 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const data = event.data as {id?:string;messageId?:string};
     if (event.type === 'messages.changed' && data.messageId) {
       const m = store.get<Message>('messages',data.messageId);
-      if (m?.role !== 'assistant' || !m.replyTo || !['done','failed'].includes(m.status ?? '') || m.origin === 'result' || m.origin === 'notification' || (m.conversationId !== 'main' && !/^project:.*:work$/.test(m.conversationId))) return;
+      if (m?.role !== 'assistant' || !m.replyTo || m.stoppedByUser || !['done','failed'].includes(m.status ?? '') || m.origin === 'result' || m.origin === 'notification' || (m.conversationId !== 'main' && !/^project:.*:work$/.test(m.conversationId))) return;
       const key = `web-message:${m.id}`;
       if (store.get('notifications.decision-sources',key)) return;
       store.transaction(()=>{background.publish({type:'web.notice',typeVersion:1,sourceId:key,data:{messageId:m.id,webPresent:presence.status().present}});store.put('notifications.decision-sources',key,{createdAt:new Date().toISOString()});});

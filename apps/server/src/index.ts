@@ -1740,6 +1740,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!receipt) return json(res,404,{error:'当前会话中未找到这次发送的回执',code:'MESSAGE_RECEIPT_NOT_FOUND'});
           return json(res, 200, receipt);
         }
+        if (path === '/api/v1/messages/main' && method === 'GET') {
+          return json(res, 200, { messages: app.store.list<Message>('messages').filter(m => m.conversationId === 'main') });
+        }
         if (path === '/api/v1/messages' && method === 'POST') {
           const input = await chatMessageBody(req);
           const projectId = typeof input.projectId === 'string' ? input.projectId.trim() || undefined : undefined;
