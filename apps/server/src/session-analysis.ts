@@ -4,7 +4,7 @@ import { analyzeSession } from '../../../packages/core/src/agent-runtime/session
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 
-type Source = { machineId: string; executorId: string; nativeSessionId: string; cwd: string };
+type Source = { machineId: string; executorId: string; nativeSessionId: string; cwd: string; mode?: 'recent' | 'full' };
 type Job = Source & { id: string; status: 'reading' | 'analysing' | 'done' | 'failed' | 'unknown'; detail: string; text: string; readBytes: number; totalBytes: number; records: number; createdAt: string };
 const object = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
 /** Select only public dialogue/actions; never send raw reasoning/system records to a model. */
@@ -52,8 +52,37 @@ export function createSessionAnalysis(options: {
   async function run(job: Job, signal: AbortSignal) {
     try {
       signal.throwIfAborted();
-      await call(job, 'agents.session', { executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd }, signal);
       const records: string[] = [];
+      if (job.mode === 'recent') {
+        job.detail = '正在读取最近对话片段…'; save(job);
+        const page = await call(job, 'agents.transcript', {
+          executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd, tailBytes: 256 * 1024,
+        }, signal) as { data?: string; startOffset?: number; nextOffset?: number; snapshot?: { size?: number } };
+        const buf = Buffer.from(String(page.data ?? ''), 'base64');
+        const textChunk = buf.toString('utf8');
+        const lines = textChunk.split('\n');
+        // Drop the first line when we jumped into the middle of the file so JSON parsing stays clean.
+        const startIdx = (page.startOffset ?? 0) > 0 ? 1 : 0;
+        for (let i = startIdx; i < lines.length; i++) {
+          const line = lines[i]?.trim();
+          if (!line) continue;
+          try {
+            const parsed = transcriptRecord(JSON.parse(line), job.executorId, job.nativeSessionId);
+            if (parsed) { records.push(parsed); job.records++; }
+          } catch { /* ignore partial trailing line */ }
+        }
+        job.readBytes = buf.length;
+        job.totalBytes = page.snapshot?.size ?? buf.length;
+        if (!records.length) throw new Error('最近 256KB 日志中没有可总结的公开对话记录');
+        signal.throwIfAborted(); job.status = 'analysing'; job.detail = `已读取最近 ${job.records} 条记录，正在快速总结…`; save(job);
+        const recentBody = records.join('\n\n').slice(-24_000);
+        const text = await (options.analyze ?? analyzeSession)(recentBody, options.config, detail => { job.detail = detail; save(job); }, { signal });
+        signal.throwIfAborted();
+        job.text = `覆盖范围：快速摘要模式（读取最近 ${Math.round(job.readBytes / 1024)}KB / 共 ${Math.round(job.totalBytes / 1024)}KB，${job.records} 条最近对话及工具记录）。\n\n${text}`;
+        job.status = 'done'; job.detail = '最新进展总结完成'; save(job);
+        return;
+      }
+      await call(job, 'agents.session', { executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd }, signal);
       await readNativeRecords((offset, snapshot) => call(job, 'agents.transcript', {
         executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd, offset, ...(snapshot && { snapshot }),
       }, signal), raw => {
@@ -81,10 +110,17 @@ export function createSessionAnalysis(options: {
       if (!options.available()) throw new Error('主模型不可用，请先完成模型配置');
       for (const key of ['machineId', 'executorId', 'nativeSessionId', 'cwd']) if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error(`缺少完整会话标识：${key}`);
       if (!['codex', 'claude-code'].includes(String(input.executorId))) throw new Error('当前 Agent 尚不支持完整会话分析');
-      const source = Object.fromEntries(['machineId', 'executorId', 'nativeSessionId', 'cwd'].map(key => [key, input[key]])) as Source;
+      const mode = input.mode === 'recent' ? 'recent' : 'full';
+      const source: Source = {
+        machineId: String(input.machineId),
+        executorId: String(input.executorId),
+        nativeSessionId: String(input.nativeSessionId),
+        cwd: String(input.cwd),
+        mode,
+      };
       const previous = store.list<Job>('session.analysis').find(job => active.has(job.id) && Object.entries(source).every(([key, value]) => job[key as keyof Source] === value));
       if (previous) return previous;
-      const job: Job = { ...source, id: randomUUID(), status: 'reading', detail: '正在定位完整原生会话', text: '', records: 0, readBytes: 0, totalBytes: 0, createdAt: new Date().toISOString() }; save(job);
+      const job: Job = { ...source, id: randomUUID(), status: 'reading', detail: mode === 'recent' ? '正在读取最近对话片段…' : '正在定位完整原生会话', text: '', records: 0, readBytes: 0, totalBytes: 0, createdAt: new Date().toISOString() }; save(job);
       const controller = new AbortController();
       const task = run(job, controller.signal).finally(() => active.delete(job.id)); active.set(job.id, { controller, task });
       return structuredClone(job);

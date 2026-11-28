@@ -45,11 +45,11 @@ export function createLiveTerminals({ api, store, router }) {
     }
     historyLoading = false; paint();
   }
-  function openHistoryAnalysis(session) {
-    const box = h('div', { class: 'stack' }, h('p', { role: 'status' }, '正在读取并分析完整对话…'));
+  function openHistoryAnalysis(session, mode = 'recent') {
+    const box = h('div', { class: 'stack' }, h('p', { role: 'status' }, mode === 'recent' ? '正在快速总结最近进展…' : '正在读取并分析完整对话…'));
     let timerId, closed = false;
     openDrawer({
-      title: `会话分析 · ${session.executorId}`,
+      title: `${mode === 'recent' ? '最新进展总结' : '完整会话分析'} · ${session.executorId}`,
       subtitle: `${session.machineName || session.machineId} · ${session.cwd}`,
       body: box,
       onClose() { closed = true; clearTimeout(timerId); },
@@ -57,20 +57,22 @@ export function createLiveTerminals({ api, store, router }) {
     const poll = async job => {
       if (closed) return;
       if (job.status === 'done') {
-        replace(box, h('div', { class: 'msg__bubble' }, renderFormattedText(job.text || job.detail || '分析已完成。')));
+        replace(box,
+          h('div', { class: 'msg__bubble' }, renderFormattedText(job.text || job.detail || '分析已完成。')),
+          mode === 'recent' && h('div', { class: 'row' }, Button({ label: '如需从头翻看：深度全量分析', size: 'sm', onClick: () => openHistoryAnalysis(session, 'full') })));
         return;
       }
       if (job.status === 'failed' || job.status === 'unknown' || job.status === 'cancelled') {
         replace(box, Banner({ tone: job.status === 'unknown' ? 'warn' : 'danger', children: job.detail || job.error || '分析未完成。' }));
         return;
       }
-      replace(box, h('p', { role: 'status' }, `${job.detail || '正在分析完整对话…'}`));
+      replace(box, h('p', { role: 'status' }, `${job.detail || '正在总结最近进展…'}`));
       timerId = setTimeout(async () => {
         try { await poll(await api.get(`/agents/sessions/analysis/${encodeURIComponent(job.id)}`)); }
         catch (cause) { if (!closed) replace(box, Banner({ tone: 'danger', children: cause.message })); }
-      }, 1500);
+      }, 1000);
     };
-    api.post('/agents/sessions/analyze', { machineId: session.machineId, executorId: session.executorId, nativeSessionId: session.nativeSessionId, cwd: session.cwd })
+    api.post('/agents/sessions/analyze', { machineId: session.machineId, executorId: session.executorId, nativeSessionId: session.nativeSessionId, cwd: session.cwd, mode })
       .then(poll)
       .catch(cause => { if (!closed) replace(box, Banner({ tone: 'danger', children: cause.message })); });
   }
@@ -175,7 +177,7 @@ export function createLiveTerminals({ api, store, router }) {
     let analysisTimer, analysing = false;
     const analysis = h('section', { hidden: true, class: 'stack', 'aria-label': '对话分析结果', style: { overflowWrap: 'anywhere' } });
     const analysisCurrent = () => !disposed && identity === context() && token === api.token?.();
-    const analyse = Button({ label: '一键分析完整对话', onClick: async () => {
+    const analyse = Button({ label: '总结最近进展', onClick: async () => {
       if (analysing) return;
       analysing = true; analyse.disabled = true; analysis.hidden = false;
       replace(analysis, h('p', { role: 'status' }, '正在定位完整原生会话…'));
@@ -206,12 +208,12 @@ export function createLiveTerminals({ api, store, router }) {
         await begin(executorId, nativeSessionId, item.cwd);
       } catch (cause) { if (analysisCurrent()) { replace(analysis, Banner({ tone: 'danger', children: cause.message })); analysing = false; analyse.disabled = false; } }
     } });
-    async function begin(executorId, nativeSessionId, targetCwd = item.cwd) {
+    async function begin(executorId, nativeSessionId, targetCwd = item.cwd, mode = 'recent') {
       if (!analysisCurrent()) return;
       analysing = true; analyse.disabled = true;
-      replace(analysis, h('p', { role: 'status' }, '正在读取整个会话…'));
+      replace(analysis, h('p', { role: 'status' }, mode === 'recent' ? '正在快速总结最近进展…' : '正在读取整个会话…'));
       try {
-        const job = await api.post('/agents/sessions/analyze', { machineId: item.machineId, executorId, nativeSessionId, cwd: targetCwd });
+        const job = await api.post('/agents/sessions/analyze', { machineId: item.machineId, executorId, nativeSessionId, cwd: targetCwd, mode });
         if (!analysisCurrent()) return;
         await watchAnalysis(job);
       } catch (cause) { if (analysisCurrent()) { replace(analysis, Banner({ tone: 'danger', children: cause.message })); analysing = false; analyse.disabled = false; } }

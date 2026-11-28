@@ -335,10 +335,10 @@ export function createCliSessionDiscovery(options: Options = {}) {
   }
   const handlers = {
     'agents.transcript': async (params: unknown) => {
-      only(params, ['executorId', 'nativeSessionId', 'cwd', 'offset', 'snapshot']);
+      only(params, ['executorId', 'nativeSessionId', 'cwd', 'offset', 'snapshot', 'tailBytes']);
       const target = params as Selection;
       if (!['codex', 'claude-code'].includes(target.executorId) || !validId(target.nativeSessionId)) throw new Error('无效会话');
-      const range = transcriptRange(params.offset, params.snapshot);
+      const range = transcriptRange(params.offset, params.snapshot, params.tailBytes);
       const cwd = await realpath(absolute(target.cwd));
       if (!await projects.nativeDirectoryFilter(() => {})(cwd)) throw new Error('目录不在会话读取范围');
       const { result, logs, found, conflicts } = await scan(target);

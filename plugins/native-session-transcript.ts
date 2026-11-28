@@ -2,13 +2,18 @@ import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 
 type Snapshot = { size: number; dev: number; ino: number };
-type Range = { offset: number; snapshot?: Snapshot };
+type Range = { offset: number; snapshot?: Snapshot; tailBytes?: number };
 const pageBytes = 192 * 1024;
+const maxTailBytes = 1024 * 1024;
 function integer(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-export function transcriptRange(offset: unknown, snapshot: unknown): Range {
+export function transcriptRange(offset: unknown, snapshot: unknown, tailBytes?: unknown): Range {
+  if (tailBytes !== undefined) {
+    if (!integer(tailBytes) || tailBytes < 1024 || tailBytes > maxTailBytes) throw new Error('无效的会话日志 tailBytes');
+    return { offset: 0, tailBytes };
+  }
   if (offset === undefined) offset = 0;
   if (!integer(offset)) throw new Error('无效的会话日志 offset');
   if (snapshot === undefined) {
@@ -37,10 +42,12 @@ export async function readNativeTranscript(
     const snapshot = range.snapshot ?? { size: before.size, dev: before.dev, ino: before.ino };
     if (!integer(before.size) || !integer(before.dev) || !integer(before.ino) || !integer(snapshot.size) || snapshot.size > before.size
       || snapshot.dev !== before.dev || snapshot.ino !== before.ino) throw new Error('会话日志快照无效、已被替换或截短');
-    const buffer = Buffer.alloc(Math.min(pageBytes, snapshot.size - range.offset));
+    const startOffset = range.tailBytes !== undefined ? Math.max(0, snapshot.size - range.tailBytes) : range.offset;
+    const readLen = range.tailBytes !== undefined ? Math.min(range.tailBytes, snapshot.size - startOffset) : Math.min(pageBytes, snapshot.size - startOffset);
+    const buffer = Buffer.alloc(readLen);
     let bytesRead = 0;
     while (bytesRead < buffer.length) {
-      const read = await file.read(buffer, bytesRead, buffer.length - bytesRead, range.offset + bytesRead);
+      const read = await file.read(buffer, bytesRead, buffer.length - bytesRead, startOffset + bytesRead);
       if (!read.bytesRead) throw new Error('会话日志读取不足，可能已截短');
       bytesRead += read.bytesRead;
     }
@@ -52,7 +59,7 @@ export async function readNativeTranscript(
       || pathInfo.dev !== before.dev || pathInfo.ino !== before.ino) throw new Error('会话日志已被替换');
     if ([after, pathInfo].some(info => info.size < before.size
       || (info.size === before.size && (info.mtimeMs !== before.mtimeMs || info.ctimeMs !== before.ctimeMs)))) throw new Error('会话日志读取期间被修改或截短');
-    const nextOffset = range.offset + bytesRead;
-    return { data: buffer.toString('base64'), nextOffset, snapshot, eof: nextOffset === snapshot.size };
+    const nextOffset = startOffset + bytesRead;
+    return { data: buffer.toString('base64'), startOffset, nextOffset, snapshot, eof: nextOffset === snapshot.size };
   } finally { await file.close(); }
 }
