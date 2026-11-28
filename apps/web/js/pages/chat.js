@@ -234,7 +234,10 @@ export function createChatPage({ api, store, scope, router }) {
     }
   }
 
-  function autosize() { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 200)}px`; }
+  function autosize() {
+    input.style.height = 'auto';
+    if (input.scrollHeight > 0) input.style.height = `${Math.min(input.scrollHeight, 200)}px`;
+  }
   input.addEventListener('input', () => {
     syncDraft();
     if (draftKey) drafts.write(draftKey, input.value);
