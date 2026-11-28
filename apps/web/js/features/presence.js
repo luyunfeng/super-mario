@@ -1,4 +1,4 @@
-import { browserDevice } from './web-push.js';
+import { browserDevice } from './notice-worker.js';
 
 export function installPresence(api) {
   // A per-document id avoids collisions when a tab is duplicated from sessionStorage.

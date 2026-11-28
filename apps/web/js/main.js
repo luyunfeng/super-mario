@@ -17,7 +17,7 @@ import { startPages } from './features/plugin-settings.js';
 import { createSearch } from './features/search.js';
 import { installShortcuts } from './features/shortcuts.js';
 import { installBrowserNotifications } from './features/browser-notifications.js';
-import { pushWorker } from './features/web-push.js';
+import { pushWorker } from './features/notice-worker.js';
 import { openQuickTodo } from './features/quick-todo.js';
 import { playSplash, stopSplash } from './features/splash.js';
 import { createConsole } from './legacy/terminal.js';

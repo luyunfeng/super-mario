@@ -2,7 +2,7 @@
 // Whether to show it is decided here, by this browser's settings and which tab is in front.
 import { h, readLocal, writeLocal } from '../lib/dom.js';
 import { Button, Check, Field, Input, Select } from '../ui/kit.js';
-import { readSubscription, subscribePush, testPush, unsubscribePush, webPushProblem } from './web-push.js';
+import { readSubscription, subscribePush, testPush, unsubscribePush, webPushProblem } from './notice-worker.js';
 
 const storageKey = 'sm.browser-notifications';
 const seenKey = 'sm.browser-notifications.seen';
