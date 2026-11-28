@@ -454,7 +454,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           ...(customAnthropic ? {} : { authHeader: true }),
           // The fallback is registered too, so that it can be had if the first is not there.
           models: [id, ...(fallbackId ? [fallbackId] : [])].map(modelId => ({ id: modelId, name: modelId, reasoning: false, input: ['text','image'],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })),
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: /\[1m\]$/i.test(modelId) ? 1_000_000 : 32768, maxTokens: 4096 })),
         });
       } else if (endpoint) modelRuntime.registerProvider(provider, { baseUrl: endpoint });
       const key = apiKey || (provider === 'openai-compatible' ? process.env.OPENAI_API_KEY : undefined);
@@ -785,8 +785,13 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     // The host already bounds inline images. SDK auto-resize can silently replace
     // them with omission text; preserve their bytes so a provider rejection is visible.
     // In-memory settings also prevent installing user-configured packages.
+    // Leave room for the next tool result or model output. Small windows need
+    // proportionally more headroom. Keep the raw tail below the trigger point.
+    const window = activeModelInfo.contextWindow;
+    const reserveTokens = Math.ceil(Math.min(window * 0.4, Math.max(window * 0.2, 16_384, model.maxTokens || 0)));
     const settingsManager = sdk.SettingsManager.inMemory({
-      packages: [], images: { autoResize: false }, retry: { enabled: false }, compaction: { enabled: false }, cacheWarming: 'off',
+      packages: [], images: { autoResize: false }, retry: { enabled: false },
+      compaction: { enabled: true, reserveTokens, keepRecentTokens: Math.min(20_000, Math.floor(window * 0.2)) }, cacheWarming: 'off',
     });
     const resourceLoader = new sdk.DefaultResourceLoader({
       cwd, agentDir, settingsManager, noExtensions: true, noSkills: true,
@@ -1092,6 +1097,13 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         // message_end contains complete text, unlike deltas which may be replayed or revised.
         const unsubscribe = session.subscribe(event => {
           if (turn.stopped) return;
+          if (event.type === 'compaction_end' && event.result && event.willRetry && failure) {
+            // pi discarded the failed attempt. Let the recovery response settle this turn.
+            replies.pop();
+            failure = undefined;
+            providerFailure = false;
+            return;
+          }
           if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
             markToolStart(turn);
             const name = /^[a-zA-Z0-9_.:-]{1,80}$/.test(event.toolName) ? event.toolName : 'tool';

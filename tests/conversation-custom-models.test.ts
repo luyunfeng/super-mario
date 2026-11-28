@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,24 +9,28 @@ import { createStore } from '../packages/core/src/store.ts';
 import type { AppConfig } from '../packages/protocol/src/index.ts';
 import { createWorkbench } from '../packages/core/src/workbench.ts';
 
-async function customGateway(t: test.TestContext, demo = false) {
+async function customGateway(t: test.TestContext, demo = false, simulate?: (messages: Array<{ role: string; content: unknown }>) => {
+    overflow?: boolean; tokens?: number; text?: string;
+  }) {
   const requests: Array<{ model: string; path: string }> = [];
   const gateway = createServer(async (req, res) => {
     if (req.method !== 'POST') { res.writeHead(404).end(); return; }
     let body = '';
     for await (const chunk of req) body += chunk;
-    const { model } = JSON.parse(body);
+    const { model, messages } = JSON.parse(body);
+    const reply = simulate?.(messages);
     requests.push({ model, path: req.url! });
-    if (model === 'fixture-rejected') {
+    if (model === 'fixture-rejected' || reply?.overflow) {
       res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({
-        error: { message: 'fixture model rejected' },
+        error: { message: reply?.overflow ? 'prompt is too long: 40000 tokens > 32768 maximum' : 'fixture model rejected' },
       }));
       return;
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
-    const deltas = [{ role: 'assistant', content: '合成回复' }, {}];
+    const deltas = [{ role: 'assistant', content: reply?.text ?? '合成回复' }, {}];
     for (const [index, delta] of deltas.entries()) {
       res.write('data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', model,
+        ...(reply?.tokens && { usage: { prompt_tokens: reply.tokens, completion_tokens: 1, total_tokens: reply.tokens + 1 } }),
         choices: [{ index: 0, delta, finish_reason: index === 0 ? null : 'stop' }] }) + '\n\n');
     }
     res.end('data: [DONE]\n\n');
@@ -48,7 +52,9 @@ async function customGateway(t: test.TestContext, demo = false) {
   });
   return { get app() { return app; }, requests,
     async useEndpoint(name: string) { await app.configureModel({ mode: 'api', ...model, baseUrl: baseUrl + '/' + name + '/v1' }); },
-    async restart() { await app.close(); app = await createWorkbench(config); } };
+    async restart(whileClosed?: (dataDir: string) => Promise<void>) {
+      await app.close(); await whileClosed?.(dataDir); app = await createWorkbench(config);
+    } };
 }
 
 test('同接入共享成功使用的自定义型号，删除保留选型，重启与换端点分别恢复对应历史', { timeout: 90000 }, async t => {
@@ -155,4 +161,55 @@ test('型号输入仅向支持自定义型号的接入开放', async t => {
     assert.equal(Boolean(models.catalog().typed), allowed);
     if (!allowed) assert.throws(() => models.pick('fixture-outside', true));
   }
+});
+
+test('pi 在阈值处持久化摘要，并在上下文溢出后恢复同一回合', async t => {
+  let summaries = 0;
+  let overflow = false;
+  let tokens = 100;
+  let reusedSummary = false;
+  const f = await customGateway(t, false, messages => {
+    if (JSON.stringify(messages[0]).includes('context summarization assistant')) {
+      summaries++;
+      return { text: 'SYNTHETIC_HISTORY_SUMMARY' };
+    }
+    reusedSummary = messages.some(message => JSON.stringify(message.content).includes('SYNTHETIC_HISTORY_SUMMARY'));
+    if (overflow) { overflow = false; return { overflow: true }; }
+    return { tokens };
+  });
+  const ask = (text: string) => f.app.agent.ask(text);
+  await ask('较早对话');
+  await ask('A'.repeat(30000));
+  assert.equal(summaries, 0);
+  tokens = 21_000;
+  await ask('超过小窗口的阈值');
+  assert.ok(summaries > 0);
+  tokens = 100;
+  await f.restart();
+  await ask('B'.repeat(30000));
+  assert.ok(reusedSummary);
+  const previous = summaries;
+  overflow = true;
+  const answer = await ask('继续当前任务');
+  assert.equal(answer.text, '合成回复');
+  assert.ok(summaries > previous);
+  assert.ok(reusedSummary);
+
+  await ask('C'.repeat(30000));
+  await ask('模拟旧会话的最后一次失败');
+  await f.restart(async dataDir => {
+    const dir = join(dataDir, 'pi/sessions/main');
+    const files = (await readdir(dir)).filter(name => name.endsWith('.jsonl'));
+    assert.equal(files.length, 1);
+    const path = join(dir, files[0]!);
+    const entries = (await readFile(path, 'utf8')).trimEnd().split('\n').map(line => JSON.parse(line));
+    const last = entries.at(-1).message;
+    assert.equal(last.role, 'assistant');
+    Object.assign(last, { stopReason: 'error', content: [], errorMessage: 'prompt is too long: 40000 tokens > 32768 maximum' });
+    await writeFile(path, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
+  });
+  const beforeResume = summaries;
+  assert.equal((await ask('恢复失败会话')).text, '合成回复');
+  assert.ok(summaries > beforeResume);
+  assert.ok(reusedSummary);
 });
