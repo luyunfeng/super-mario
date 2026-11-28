@@ -1,5 +1,6 @@
 # Super Mario
 
+第一次使用请从[用户 Wiki](docs/wiki/README.md)开始，跟着一份周报走完从收件、派发到验收的流程。
 面向 Linux 的本地优先、插件化个人 AI 工作台。单进程启动服务端与同源 Web，基于本地 SQLite 与 Markdown 文件持久化；需要跨机器运行外部 CLI 时通过轻量执行机代理连接。
 
 ```bash
