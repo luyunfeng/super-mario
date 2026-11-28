@@ -28,6 +28,24 @@ export function transcriptRecord(raw: unknown, executor: string, sessionId: stri
   } else if (executor === 'claude-code' && row.sessionId === sessionId && ['user', 'assistant'].includes(row.type)) {
     const text = render(object(row.message).content);
     if (text) return `[${row.timestamp ?? ''} ${row.type}]\n${text}`;
+  } else if (executor === 'pi' && row.type === 'message') {
+    const msg = object(row.message);
+    if (['user', 'assistant'].includes(msg.role)) {
+      const text = render(msg.content);
+      if (text) return `[${row.timestamp ?? ''} ${msg.role}]\n${text}`;
+    }
+  } else if (executor === 'agy') {
+    if (row.type === 'USER_INPUT' && typeof row.content === 'string' && row.content.trim()) {
+      return `[${row.created_at ?? ''} user]\n${row.content}`;
+    }
+    if (row.type === 'PLANNER_RESPONSE') {
+      const parts: string[] = [];
+      if (typeof row.content === 'string' && row.content.trim()) parts.push(row.content);
+      if (Array.isArray(row.tool_calls) && row.tool_calls.length) {
+        parts.push(`工具调用：${row.tool_calls.map((tc: Record<string, unknown>) => String(tc?.name ?? tc?.tool ?? 'tool')).join('、')}`);
+      }
+      if (parts.length) return `[${row.created_at ?? ''} assistant]\n${parts.join('\n')}`;
+    }
   }
   return '';
 }
@@ -164,7 +182,7 @@ export function createSessionAnalysis(options: {
         for (const key of ['machineId', 'paneId', 'terminalId', 'cwd']) if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error(`缺少终端标识：${key}`);
       } else {
         for (const key of ['machineId', 'executorId', 'nativeSessionId', 'cwd']) if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error(`缺少完整会话标识：${key}`);
-        if (!['codex', 'claude-code'].includes(String(input.executorId))) throw new Error('当前 Agent 尚不支持完整会话分析');
+        if (!['codex', 'claude-code', 'pi', 'agy'].includes(String(input.executorId))) throw new Error('当前 Agent 尚不支持完整会话分析');
       }
       const source: Source = {
         machineId: String(input.machineId),

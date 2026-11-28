@@ -56,6 +56,8 @@ export function createCliSessionDiscovery(options: Options = {}) {
   }
   const codexHome = profileRoot(options.codexHome, '.codex');
   const claudeHome = profileRoot(options.claudeHome, '.claude');
+  const piHome = canonicalHome.then(root => join(root, '.pi', 'agent'));
+  const agyHome = canonicalHome.then(root => join(root, '.gemini', 'antigravity-cli'));
   const configuredRoots = options.roots === undefined ? undefined : rootsList(options.roots);
   const projects = createProjectDiscovery({ ...options, home, roots: [], ignoreEnvironmentRoots: true });
 
@@ -98,6 +100,9 @@ export function createCliSessionDiscovery(options: Options = {}) {
       const direct = cleanTitle(row.customTitle ?? row.aiTitle ?? row.agentName ?? row.summary ?? row.firstPrompt ?? row.title);
       if (direct) return direct;
       // Claude JSONL user message: { type: 'user', message: { role: 'user', content: string | [{type:'text',text}] } }
+      // pi JSONL user message: { type: 'message', message: { role: 'user', content: ... } }
+      // agy JSONL user message: { type: 'USER_INPUT', content: string }
+      if (row.type === 'USER_INPUT' && typeof row.content === 'string') return cleanTitle(row.content);
       const msg = object(row.message) ? row.message : undefined;
       if (row.type === 'user' || msg?.role === 'user') {
         const content = msg?.content ?? row.content;
@@ -124,7 +129,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
       return undefined;
     }
     async function add(executorId: NativeExecutorId, meta: Record<string, unknown>, observedAt: string, index = false, outerTime?: unknown, fileModifiedAt?: string, archived = false, title?: string) {
-      const id = executorId === 'codex' ? meta.id : meta.sessionId ?? meta.session_id;
+      const id = executorId === 'codex' || executorId === 'pi' || executorId === 'agy' ? meta.id : meta.sessionId ?? meta.session_id;
       if (!validId(id)) { warn('部分会话元数据缺少有效原生 ID，已跳过'); return false; }
       if (target && (executorId !== target.executorId || id !== target.nativeSessionId)) return true;
       const key = `${executorId}:${id}`;
@@ -205,13 +210,17 @@ export function createCliSessionDiscovery(options: Options = {}) {
         if (!object(row)) continue;
         if (!detectedTitle) detectedTitle = extractRowTitle(row);
         if (!matched) {
-          const meta = executorId === 'codex' ? row.type === 'session_meta' && object(row.payload) ? row.payload : undefined : row;
+          const meta = executorId === 'codex'
+            ? (row.type === 'session_meta' && object(row.payload) ? row.payload : undefined)
+            : executorId === 'pi'
+              ? (row.type === 'session' ? row : undefined)
+              : row;
           if (meta) {
             matched = await add(executorId, meta, data.observedAt, false, row.timestamp, data.fileModifiedAt, executorId === 'codex' && dirname(path) === archiveDirectory, detectedTitle) || matched;
             if (matched) {
-              const id = executorId === 'codex' ? meta.id : meta.sessionId ?? meta.session_id;
+              const id = executorId === 'codex' || executorId === 'pi' ? meta.id : meta.sessionId ?? meta.session_id;
               if (validId(id)) matchedKey = `${executorId}:${id}`;
-              if (target && path.endsWith('.jsonl') && (meta.id === target.nativeSessionId && executorId === 'codex' || executorId === 'claude-code' && (meta.sessionId ?? meta.session_id) === target.nativeSessionId)) {
+              if (target && path.endsWith('.jsonl') && ((meta.id === target.nativeSessionId && (executorId === 'codex' || executorId === 'pi')) || (executorId === 'claude-code' && (meta.sessionId ?? meta.session_id) === target.nativeSessionId))) {
                 logs.set(path, { path, dev: data.dev, ino: data.ino });
               }
             }
@@ -262,7 +271,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
       warn(`${label} 显式配置目录不存在或不可用，未读取会话`);
       return false;
     }
-    const codexRoot = await codexHome, claudeRoot = await claudeHome;
+    const codexRoot = await codexHome, claudeRoot = await claudeHome, piRoot = await piHome, agyRoot = await agyHome;
     if ((!target || target.executorId === 'codex') && await available(codexRoot, options.codexHome !== undefined, 'Codex')) {
       await walk(join(codexRoot, 'sessions'), 'codex', 3);
       await walk(archiveDirectory, 'codex', 0);
@@ -270,6 +279,71 @@ export function createCliSessionDiscovery(options: Options = {}) {
     if ((!target || target.executorId === 'claude-code') && await available(claudeRoot, options.claudeHome !== undefined, 'Claude')) {
       await walk(join(claudeRoot, 'projects'), 'claude-code', 2);
       await walk(join(claudeRoot, 'sessions'), 'claude-code', 1);
+    }
+    if (!target || target.executorId === 'pi') {
+      await walk(join(piRoot, 'sessions'), 'pi', 2);
+    }
+    // Read-only Antigravity CLI (agy) brain transcript discovery.
+    if (!target || target.executorId === 'agy') {
+      const brainDir = join(agyRoot, 'brain');
+      try {
+        if (await noLinks(brainDir) && (await lstat(brainDir)).isDirectory()) {
+          const dir = await opendir(brainDir);
+          const ids: string[] = [];
+          for await (const entry of dir) {
+            if (entry.isDirectory() && /^[0-9a-f-]{8,64}$/i.test(entry.name)) {
+              if (!target || entry.name === target.nativeSessionId) ids.push(entry.name);
+            }
+          }
+          for (const convId of ids.slice(0, 120)) {
+            const logPath = join(brainDir, convId, '.system_generated', 'logs', 'transcript.jsonl');
+            const data = await head(logPath, 64 * 1024);
+            if (!data) continue;
+            const lines = data.text.split('\n');
+            let title: string | undefined;
+            let cwdCandidate: string | undefined;
+            let firstTs: string | undefined;
+            for (const line of lines.slice(0, 25)) {
+              if (!line.trim()) continue;
+              try {
+                const row = JSON.parse(line) as Record<string, unknown>;
+                if (!firstTs && typeof row.created_at === 'string') firstTs = row.created_at;
+                if (!title && row.type === 'USER_INPUT' && typeof row.content === 'string') title = cleanTitle(row.content);
+                if (!cwdCandidate && Array.isArray(row.tool_calls)) {
+                  for (const tc of row.tool_calls) {
+                    const argsStr = JSON.stringify(tc);
+                    const m = argsStr.match(/"(\/(?:data00\/)?(?:home|Users|workspace|opt|srv|var)\/[^"\\]{2,200})"/);
+                    if (m) {
+                      let candidate = m[1]!;
+                      try {
+                        const st = await stat(candidate);
+                        if (!st.isDirectory()) candidate = dirname(candidate);
+                        // Walk up to nearest .git root when inside a repo so sessions group cleanly under the project root.
+                        let cur = candidate;
+                        for (let hop = 0; hop < 6; hop++) {
+                          try { if ((await lstat(join(cur, '.git'))).isDirectory() || (await lstat(join(cur, '.git'))).isFile()) { candidate = cur; break; } } catch {}
+                          const parent = dirname(cur);
+                          if (parent === cur) break;
+                          cur = parent;
+                        }
+                        cwdCandidate = candidate;
+                        break;
+                      } catch {}
+                    }
+                  }
+                }
+                if (title && cwdCandidate) break;
+              } catch {}
+            }
+            if (cwdCandidate) {
+              const ok = await add('agy', { id: convId, cwd: cwdCandidate, timestamp: firstTs }, data.observedAt, false, firstTs, data.fileModifiedAt, false, title);
+              if (ok && target && target.nativeSessionId === convId) {
+                logs.set(logPath, { path: logPath, dev: data.dev, ino: data.ino });
+              }
+            }
+          }
+        }
+      } catch { /* agy brain dir absent or unreadable */ }
     }
     return { result, found, conflicts, logs };
   }
@@ -337,7 +411,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
     'agents.transcript': async (params: unknown) => {
       only(params, ['executorId', 'nativeSessionId', 'cwd', 'offset', 'snapshot', 'tailBytes']);
       const target = params as Selection;
-      if (!['codex', 'claude-code'].includes(target.executorId) || !validId(target.nativeSessionId)) throw new Error('无效会话');
+      if (!['codex', 'claude-code', 'pi', 'agy'].includes(target.executorId) || !validId(target.nativeSessionId)) throw new Error('无效会话');
       const range = transcriptRange(params.offset, params.snapshot, params.tailBytes);
       const cwd = await realpath(absolute(target.cwd));
       if (!await projects.nativeDirectoryFilter(() => {})(cwd)) throw new Error('目录不在会话读取范围');

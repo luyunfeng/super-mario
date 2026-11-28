@@ -126,7 +126,7 @@ export function createLiveTerminals({ api, store, router }) {
       const savedName = customNames[`${item.machineId}:${nameExec}:${nameId}`] || meta?.customTitle;
       const displayTitle = savedName || item.title || meta?.title || '现场终端';
       const renameObj = { machineId: item.machineId, machineName: item.machineName, executorId: nameExec, nativeSessionId: nameId, cwd: item.cwd, title: displayTitle, customTitle: savedName };
-      const analyzeObj = item.nativeSessionId && ['claude-code', 'codex'].includes(execId)
+      const analyzeObj = item.nativeSessionId && ['claude-code', 'codex', 'pi', 'agy'].includes(execId)
         ? { machineId: item.machineId, machineName: item.machineName, executorId: execId, nativeSessionId: item.nativeSessionId, cwd: item.cwd, mode: 'recent' }
         : { machineId: item.machineId, machineName: item.machineName, executorId: execId || 'terminal', nativeSessionId: item.terminalId, paneId: item.paneId, terminalId: item.terminalId, cwd: item.cwd, mode: 'screen' };
       return h('article', { class: 'item', dataset: { livePane: item.paneId }, style: { minWidth: 0 } },
@@ -199,11 +199,11 @@ export function createLiveTerminals({ api, store, router }) {
       replace(analysis, h('p', { role: 'status' }, '正在定位完整原生会话…'));
       try {
         const executorId = item.agent === 'claude' || item.agent === 'claude-code' ? 'claude-code' : item.agent;
-        if (item.nativeSessionId && ['claude-code', 'codex'].includes(executorId)) {
+        if (item.nativeSessionId && ['claude-code', 'codex', 'pi', 'agy'].includes(executorId)) {
           await begin(executorId, item.nativeSessionId, item.cwd, 'recent');
           return;
         }
-        // For agy or any other live terminal without a native claude/codex log, summarize recent live screen directly.
+        // For any live terminal without a native log match, summarize recent live screen directly.
         await begin(executorId || 'terminal', item.terminalId, item.cwd, 'screen');
       } catch (cause) { if (analysisCurrent()) { replace(analysis, Banner({ tone: 'danger', children: cause.message })); analysing = false; analyse.disabled = false; } }
     } });

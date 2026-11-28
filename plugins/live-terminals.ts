@@ -223,7 +223,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
   };
   const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
   async function resolveNativeSessionFromPane(paneId: string, agent: string, endpoint: NodeJS.ProcessEnv): Promise<string | undefined> {
-    if (!['codex', 'claude', 'claude-code'].includes(agent)) return undefined;
+    if (!['codex', 'claude', 'claude-code', 'pi', 'agy'].includes(agent)) return undefined;
     try {
       const raw = row(row(JSON.parse(await run(['pane', 'process-info', '--pane', paneId], endpoint))).result);
       const info = row(raw.process_info);
@@ -253,8 +253,12 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
             for (const fd of fds.slice(0, 128)) {
               try {
                 const target = await readlink(`/proc/${pid}/fd/${fd}`);
+                if (target.includes('/antigravity-cli/brain/')) {
+                  const m = target.match(/\/brain\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i);
+                  if (m) return m[1];
+                }
                 if (!target.endsWith('.jsonl')) continue;
-                if (!target.includes('/.codex/') && !target.includes('/.claude/')) continue;
+                if (!target.includes('/.codex/') && !target.includes('/.claude/') && !target.includes('/.pi/')) continue;
                 const match = basename(target, '.jsonl').match(UUID_RE);
                 if (match) return match[1];
               } catch { /* fd closed */ }
